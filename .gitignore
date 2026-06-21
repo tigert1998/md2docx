@@ -1,0 +1,10 @@
+.venv
+.uv-cache
+.mplconfig
+.pytest_cache
+.rendered
+.test-tmp
+.formula-audit
+__pycache__
+
+examples
