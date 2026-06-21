@@ -177,7 +177,11 @@ $$
 
     document = Document(output)
     assert document.paragraphs[0].text == "测试文档"
-    assert document.paragraphs[0].style.name == "MD2DOCX Title"
+    assert document.paragraphs[0].style.name == "Title"
+    assert document.paragraphs[0]._p.pPr.numPr is None
+    assert list(document.paragraphs[0]._p.pPr)[0].tag.endswith("}pStyle")
+    assert len(list(document.paragraphs[0]._p.pPr)) == 1
+    assert document.paragraphs[0].runs[0]._r.rPr is None
     assert any(p.text == "概述" and p.style.name == "Heading 1" for p in document.paragraphs)
     assert any(p.text == "子标题" and p.style.name == "Heading 2" for p in document.paragraphs)
     assert any(p.text == "三级标题" and p.style.name == "Heading 3" for p in document.paragraphs)
@@ -188,7 +192,15 @@ $$
         if paragraph.style.name.startswith("Heading ")
     ]
     assert heading_paragraphs
-    assert all(run.bold is False for p in heading_paragraphs for run in p.runs)
+    assert all(run._r.rPr is None for p in heading_paragraphs for run in p.runs)
+    for paragraph in heading_paragraphs:
+        paragraph_properties = list(paragraph._p.pPr)
+        assert len(paragraph_properties) == 1
+        assert paragraph_properties[0].tag.endswith("}pStyle")
+    for level in range(1, 5):
+        heading_format = document.styles[f"Heading {level}"].paragraph_format
+        assert round(heading_format.first_line_indent.pt) == 32
+        assert round(heading_format.line_spacing.pt) == 28
     enumerated_paragraphs = [
         p for p in document.paragraphs if p.style.name.startswith("List Number")
     ]
@@ -269,7 +281,16 @@ $$
     )[1].split("</w:lvl>", 1)[0]
     assert '<w:i w:val="0"/>' in h4_numbering
     assert '<w:iCs w:val="0"/>' in h4_numbering
-    assert "MD2DOCXTitle" in styles_xml
+    assert "MD2DOCXTitle" not in styles_xml
+    title_style = styles_xml.split(
+        '<w:style w:type="paragraph" w:styleId="Title">',
+        1,
+    )[1].split("</w:style>", 1)[0]
+    assert "<w:basedOn" not in title_style
+    assert "<w:link" not in title_style
+    assert "<w:keepNext" not in title_style
+    assert "<w:keepLines" not in title_style
+    assert "Theme=" not in title_style
     assert "MD2DOCXEnumeratedList" not in styles_xml
     for style_id in ("ListNumber", "ListNumber2", "ListNumber3"):
         list_style = styles_xml.split(
@@ -285,6 +306,13 @@ $$
             1,
         )[1].split("</w:style>", 1)[0]
         assert '<w:b w:val="0"/>' in heading_style
+        assert '<w:i w:val="0"/>' in heading_style
+        assert "<w:basedOn" not in heading_style
+        assert "<w:link" not in heading_style
+        assert "<w:keepNext" not in heading_style
+        assert "<w:keepLines" not in heading_style
+        assert "<w:outlineLvl" not in heading_style
+        assert "Theme=" not in heading_style
     assert "w:pBdr" not in document_xml.split("测试文档", 1)[0][-500:]
     assert 'w:color w:val="000000"' in styles_xml
     assert 'w:before="60" w:after="80" w:line="240"' in document_xml

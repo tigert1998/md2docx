@@ -222,9 +222,7 @@ def load_config(
     return result
 
 
-def apply_style_to_paragraph(
-    paragraph: Any, style: BlockStyle, *, font_size_pt: float | None = None
-) -> None:
+def apply_style_to_paragraph(paragraph: Any, style: BlockStyle) -> None:
     fmt = paragraph.paragraph_format
     fmt.space_before = Pt(style.space_before_pt)
     fmt.space_after = Pt(style.space_after_pt)

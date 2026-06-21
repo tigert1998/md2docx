@@ -25,6 +25,12 @@ from .config import (
     load_config,
 )
 from .math_render import render_latex
+from .numbering import (
+    install_caption_numbering,
+    install_enumerated_list_numbering,
+    install_heading_numbering,
+    set_style_numbering,
+)
 
 
 def parse_frontmatter(source: str) -> tuple[dict[str, Any], str]:
@@ -66,267 +72,12 @@ def _set_run_style(run: Any, style: TextStyle) -> None:
     rfonts.set(qn("w:cs"), style.latin_font)
 
 
-def _remove_paragraph_border(element: Any) -> None:
-    ppr = element.get_or_add_pPr()
-    border = ppr.find(qn("w:pBdr"))
-    if border is not None:
-        ppr.remove(border)
-
-
-def _numbering_level(pattern: str, level: int) -> tuple[str, str]:
-    placeholder = f"%{level + 1}"
-    if "{cn}" in pattern:
-        return "chineseCounting", pattern.replace("{cn}", placeholder)
-    if "{n}" in pattern:
-        return "decimal", pattern.replace("{n}", placeholder)
-    if re.search(r"[一二三四五六七八九十]+", pattern):
-        return (
-            "chineseCounting",
-            re.sub(r"[一二三四五六七八九十]+", placeholder, pattern, count=1),
-        )
-    if re.search(r"\d+", pattern):
-        return "decimal", re.sub(r"\d+", placeholder, pattern, count=1)
-    raise ValueError(
-        f"heading numbering pattern {pattern!r} has no numeral placeholder"
-    )
-
-
-def _next_numbering_id(numbering: Any, tag: str, attr: str) -> int:
-    values = []
-    for child in numbering.findall(qn(f"w:{tag}")):
-        value = child.get(qn(f"w:{attr}"))
-        if value is not None and value.isdigit():
-            values.append(int(value))
-    return max(values, default=0) + 1
-
-
-def _numbering_run_properties(style: TextStyle) -> Any:
-    rpr = OxmlElement("w:rPr")
-    fonts = OxmlElement("w:rFonts")
-    fonts.set(qn("w:ascii"), style.latin_font)
-    fonts.set(qn("w:hAnsi"), style.latin_font)
-    fonts.set(qn("w:eastAsia"), style.chinese_font)
-    fonts.set(qn("w:cs"), style.latin_font)
-    rpr.append(fonts)
-
-    color = OxmlElement("w:color")
-    color.set(qn("w:val"), str(style.color))
-    rpr.append(color)
-
-    half_points = str(round(style.size_pt * 2))
-    size = OxmlElement("w:sz")
-    size.set(qn("w:val"), half_points)
-    rpr.append(size)
-    size_cs = OxmlElement("w:szCs")
-    size_cs.set(qn("w:val"), half_points)
-    rpr.append(size_cs)
-
-    bold = OxmlElement("w:b")
-    bold.set(qn("w:val"), "0")
-    rpr.append(bold)
-    bold_cs = OxmlElement("w:bCs")
-    bold_cs.set(qn("w:val"), "0")
-    rpr.append(bold_cs)
-    italic = OxmlElement("w:i")
-    italic.set(qn("w:val"), "0")
-    rpr.append(italic)
-    italic_cs = OxmlElement("w:iCs")
-    italic_cs.set(qn("w:val"), "0")
-    rpr.append(italic_cs)
-    return rpr
-
-
-def _install_heading_numbering(
-    document: Any, heading_styles: list[tuple[int, TextStyle]]
-) -> int:
-    numbering = document.part.numbering_part.element
-    abstract_id = _next_numbering_id(numbering, "abstractNum", "abstractNumId")
-    num_id = _next_numbering_id(numbering, "num", "numId")
-
-    abstract = OxmlElement("w:abstractNum")
-    abstract.set(qn("w:abstractNumId"), str(abstract_id))
-    multi = OxmlElement("w:multiLevelType")
-    multi.set(qn("w:val"), "multilevel")
-    abstract.append(multi)
-    name = OxmlElement("w:name")
-    name.set(qn("w:val"), "md2docx heading numbering")
-    abstract.append(name)
-
-    for level, style in heading_styles:
-        lvl = OxmlElement("w:lvl")
-        lvl.set(qn("w:ilvl"), str(level - 1))
-        start = OxmlElement("w:start")
-        start.set(qn("w:val"), "1")
-        lvl.append(start)
-        if level > 1:
-            restart = OxmlElement("w:lvlRestart")
-            restart.set(qn("w:val"), str(level - 1))
-            lvl.append(restart)
-
-        if style.numbering is None:
-            number_format, level_text = "none", ""
-        else:
-            number_format, level_text = _numbering_level(style.numbering, level - 1)
-        num_fmt = OxmlElement("w:numFmt")
-        num_fmt.set(qn("w:val"), number_format)
-        lvl.append(num_fmt)
-        text = OxmlElement("w:lvlText")
-        text.set(qn("w:val"), level_text)
-        lvl.append(text)
-        suffix = OxmlElement("w:suff")
-        suffix.set(qn("w:val"), "nothing")
-        lvl.append(suffix)
-        paragraph_style = OxmlElement("w:pStyle")
-        paragraph_style.set(qn("w:val"), f"Heading{level}")
-        lvl.append(paragraph_style)
-        justification = OxmlElement("w:lvlJc")
-        justification.set(qn("w:val"), "left")
-        lvl.append(justification)
-        lvl.append(_numbering_run_properties(style))
-        abstract.append(lvl)
-
-    numbering.append(abstract)
-    num = OxmlElement("w:num")
-    num.set(qn("w:numId"), str(num_id))
-    abstract_ref = OxmlElement("w:abstractNumId")
-    abstract_ref.set(qn("w:val"), str(abstract_id))
-    num.append(abstract_ref)
-    numbering.append(num)
-    return num_id
-
-
-def _install_caption_numbering(document: Any, style: TextStyle) -> int:
-    if style.numbering is None:
-        raise ValueError("image-caption.numbering must not be null")
-
-    numbering = document.part.numbering_part.element
-    abstract_id = _next_numbering_id(numbering, "abstractNum", "abstractNumId")
-    num_id = _next_numbering_id(numbering, "num", "numId")
-    number_format, level_text = _numbering_level(style.numbering, 0)
-
-    abstract = OxmlElement("w:abstractNum")
-    abstract.set(qn("w:abstractNumId"), str(abstract_id))
-    multi = OxmlElement("w:multiLevelType")
-    multi.set(qn("w:val"), "singleLevel")
-    abstract.append(multi)
-    name = OxmlElement("w:name")
-    name.set(qn("w:val"), "md2docx image caption numbering")
-    abstract.append(name)
-
-    lvl = OxmlElement("w:lvl")
-    lvl.set(qn("w:ilvl"), "0")
-    start = OxmlElement("w:start")
-    start.set(qn("w:val"), "1")
-    lvl.append(start)
-    num_fmt = OxmlElement("w:numFmt")
-    num_fmt.set(qn("w:val"), number_format)
-    lvl.append(num_fmt)
-    text = OxmlElement("w:lvlText")
-    text.set(qn("w:val"), level_text)
-    lvl.append(text)
-    suffix = OxmlElement("w:suff")
-    suffix.set(qn("w:val"), "nothing")
-    lvl.append(suffix)
-    paragraph_style = OxmlElement("w:pStyle")
-    paragraph_style.set(qn("w:val"), "ImageCaption")
-    lvl.append(paragraph_style)
-    justification = OxmlElement("w:lvlJc")
-    justification.set(qn("w:val"), "left")
-    lvl.append(justification)
-    lvl.append(_numbering_run_properties(style))
-    abstract.append(lvl)
-    numbering.append(abstract)
-
-    num = OxmlElement("w:num")
-    num.set(qn("w:numId"), str(num_id))
-    abstract_ref = OxmlElement("w:abstractNumId")
-    abstract_ref.set(qn("w:val"), str(abstract_id))
-    num.append(abstract_ref)
-    numbering.append(num)
-    return num_id
-
-
-def _install_enumerated_list_numbering(
-    document: Any, style: EnumeratedListStyle
-) -> int:
-    if style.numbering is None:
-        raise ValueError("enumerated-list.numbering must not be null")
-
-    numbering = document.part.numbering_part.element
-    abstract_id = _next_numbering_id(numbering, "abstractNum", "abstractNumId")
-    num_id = _next_numbering_id(numbering, "num", "numId")
-    abstract = OxmlElement("w:abstractNum")
-    abstract.set(qn("w:abstractNumId"), str(abstract_id))
-    multi = OxmlElement("w:multiLevelType")
-    multi.set(qn("w:val"), "multilevel")
-    abstract.append(multi)
-    name = OxmlElement("w:name")
-    name.set(qn("w:val"), "md2docx enumerated list numbering")
-    abstract.append(name)
-
-    for level in range(9):
-        lvl = OxmlElement("w:lvl")
-        lvl.set(qn("w:ilvl"), str(level))
-        start = OxmlElement("w:start")
-        start.set(qn("w:val"), "1")
-        lvl.append(start)
-        if level > 0:
-            restart = OxmlElement("w:lvlRestart")
-            restart.set(qn("w:val"), str(level))
-            lvl.append(restart)
-
-        number_format, level_text = _numbering_level(style.numbering, level)
-        num_fmt = OxmlElement("w:numFmt")
-        num_fmt.set(qn("w:val"), number_format)
-        lvl.append(num_fmt)
-        text = OxmlElement("w:lvlText")
-        text.set(qn("w:val"), level_text)
-        lvl.append(text)
-        suffix = OxmlElement("w:suff")
-        suffix.set(qn("w:val"), "nothing")
-        lvl.append(suffix)
-        paragraph_style = OxmlElement("w:pStyle")
-        paragraph_style.set(qn("w:val"), f"ListNumber{level + 1 if level else ''}")
-        lvl.append(paragraph_style)
-        justification = OxmlElement("w:lvlJc")
-        justification.set(qn("w:val"), "left")
-        lvl.append(justification)
-
-        paragraph_properties = OxmlElement("w:pPr")
-        indent = OxmlElement("w:ind")
-        left_twips = round(
-            style.size_pt * style.indent_before_text_increment_em * level * 20
-        )
-        indent.set(qn("w:left"), str(left_twips))
-        paragraph_properties.append(indent)
-        lvl.append(paragraph_properties)
-        lvl.append(_numbering_run_properties(style))
-        abstract.append(lvl)
-
-    numbering.append(abstract)
-    num = OxmlElement("w:num")
-    num.set(qn("w:numId"), str(num_id))
-    abstract_ref = OxmlElement("w:abstractNumId")
-    abstract_ref.set(qn("w:val"), str(abstract_id))
-    num.append(abstract_ref)
-    numbering.append(num)
-    return num_id
-
-
-def _set_style_numbering(style: Any, num_id: int, level: int, enabled: bool) -> None:
-    ppr = style.element.get_or_add_pPr()
-    existing = ppr.find(qn("w:numPr"))
-    if existing is not None:
-        ppr.remove(existing)
-    if not enabled:
-        return
-    num_pr = OxmlElement("w:numPr")
-    ilvl = OxmlElement("w:ilvl")
-    ilvl.set(qn("w:val"), str(level - 1))
-    num = OxmlElement("w:numId")
-    num.set(qn("w:val"), str(num_id))
-    num_pr.extend([ilvl, num])
-    ppr.append(num_pr)
+def _reset_word_style_formatting(style: Any) -> None:
+    element = style.element
+    for tag in ("w:basedOn", "w:link", "w:pPr", "w:rPr"):
+        child = element.find(qn(tag))
+        if child is not None:
+            element.remove(child)
 
 
 def _shade_cell(cell: Any, fill: str) -> None:
@@ -421,15 +172,11 @@ class DocxBuilder:
         section.right_margin = Inches(1)
         section.page_width = Inches(8.5)
         section.page_height = Inches(11)
-        if "MD2DOCX Title" not in self.document.styles:
-            title_style = self.document.styles.add_style(
-                "MD2DOCX Title", WD_STYLE_TYPE.PARAGRAPH
-            )
-            title_style.base_style = self.document.styles["Normal"]
-        else:
-            title_style = self.document.styles["MD2DOCX Title"]
+        title_style = self.document.styles["Title"]
+        _reset_word_style_formatting(title_style)
         self._configure_word_style(title_style, self.text_style("title"))
-        _remove_paragraph_border(title_style.element)
+        title_style.font.bold = False
+        title_style.font.italic = False
 
         self._configure_word_style(
             self.document.styles["Normal"], self.text_style("body")
@@ -442,12 +189,14 @@ class DocxBuilder:
             ),
             key=lambda item: item[0],
         )
-        num_id = _install_heading_numbering(self.document, heading_styles)
+        num_id = install_heading_numbering(self.document, heading_styles)
         for level, config_style in heading_styles:
             word_style = self.document.styles[f"Heading {level}"]
+            _reset_word_style_formatting(word_style)
             self._configure_word_style(word_style, config_style)
             word_style.font.bold = False
-            _set_style_numbering(
+            word_style.font.italic = False
+            set_style_numbering(
                 word_style, num_id, level, config_style.numbering is not None
             )
         if "Image Caption" not in self.document.styles:
@@ -458,14 +207,14 @@ class DocxBuilder:
             self.document.styles["Image Caption"],
             self.text_style("image-caption"),
         )
-        caption_num_id = _install_caption_numbering(
+        caption_num_id = install_caption_numbering(
             self.document, self.text_style("image-caption")
         )
-        _set_style_numbering(
+        set_style_numbering(
             self.document.styles["Image Caption"], caption_num_id, 1, True
         )
         enumerated_style = self.enumerated_list_style()
-        enumerated_num_id = _install_enumerated_list_numbering(
+        enumerated_num_id = install_enumerated_list_numbering(
             self.document, enumerated_style
         )
         for level in range(9):
@@ -485,7 +234,7 @@ class DocxBuilder:
                 * enumerated_style.indent_before_text_increment_em
                 * level
             )
-            _set_style_numbering(
+            set_style_numbering(
                 list_style, enumerated_num_id, level + 1, True
             )
 
@@ -510,12 +259,8 @@ class DocxBuilder:
         return "List Number" if level == 0 else f"List Number {level + 1}"
 
     def add_title(self, title: str) -> None:
-        style = self.text_style("title")
-        paragraph = self.document.add_paragraph(style="MD2DOCX Title")
-        apply_style_to_paragraph(paragraph, style)
-        _remove_paragraph_border(paragraph._p)
-        run = paragraph.add_run(title.strip())
-        _set_run_style(run, style)
+        paragraph = self.document.add_paragraph(style="Title")
+        paragraph.add_run(title.strip())
 
     def add_heading(self, token: dict[str, Any]) -> None:
         level = int(token["attrs"]["level"])
@@ -526,8 +271,9 @@ class DocxBuilder:
             )
         style = self.text_style(key)
         paragraph = self.document.add_paragraph(style=f"Heading {level}")
-        apply_style_to_paragraph(paragraph, style)
-        self.add_inline_nodes(paragraph, token.get("children", []), style)
+        self.add_inline_nodes(
+            paragraph, token.get("children", []), style, inherit_text_style=True
+        )
 
     def add_paragraph(self, children: Iterable[dict[str, Any]]) -> None:
         children = list(children)
@@ -547,13 +293,18 @@ class DocxBuilder:
         *,
         bold: bool = False,
         italic: bool = False,
+        inherit_text_style: bool = False,
     ) -> None:
         for node in nodes:
             kind = node["type"]
             if kind == "text":
                 run = paragraph.add_run(node.get("raw", ""))
-                run.bold, run.italic = bold, italic
-                _set_run_style(run, style)
+                if bold:
+                    run.bold = True
+                if italic:
+                    run.italic = True
+                if not inherit_text_style:
+                    _set_run_style(run, style)
             elif kind in {"strong", "emphasis"}:
                 self.add_inline_nodes(
                     paragraph,
@@ -561,10 +312,12 @@ class DocxBuilder:
                     style,
                     bold=bold or kind == "strong",
                     italic=italic or kind == "emphasis",
+                    inherit_text_style=inherit_text_style,
                 )
             elif kind == "codespan":
                 run = paragraph.add_run(node.get("raw", ""))
-                _set_run_style(run, style)
+                if not inherit_text_style:
+                    _set_run_style(run, style)
                 run.font.name = "Consolas"
                 run.font.size = Pt(max(style.size_pt - 1, 8))
             elif kind == "inline_math":
@@ -576,17 +329,24 @@ class DocxBuilder:
                 text = self._plain_text(node.get("children", []))
                 url = node.get("attrs", {}).get("url", "")
                 run = paragraph.add_run(text or url)
-                _set_run_style(run, style)
+                if not inherit_text_style:
+                    _set_run_style(run, style)
                 run.underline = True
             elif kind in {"linebreak", "softbreak"}:
                 paragraph.add_run().add_break()
             elif kind == "strikethrough":
                 run = paragraph.add_run(self._plain_text(node.get("children", [])))
-                _set_run_style(run, style)
+                if not inherit_text_style:
+                    _set_run_style(run, style)
                 run.font.strike = True
             else:
                 self.add_inline_nodes(
-                    paragraph, node.get("children", []), style, bold=bold, italic=italic
+                    paragraph,
+                    node.get("children", []),
+                    style,
+                    bold=bold,
+                    italic=italic,
+                    inherit_text_style=inherit_text_style,
                 )
 
     def add_block_math(self, expression: str) -> None:
