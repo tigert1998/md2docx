@@ -95,6 +95,18 @@ math-block:
   space-after: 4pt
   line-spacing: 1em
   align: center
+enumerated-list:
+  chinese-font: FangSong
+  latin-font: Times New Roman
+  size: 16pt
+  color: "#000000"
+  space-before: 0pt
+  space-after: 0pt
+  line-spacing: 28pt
+  numbering: "1. "
+  indent-before-text-increment: 2em
+  first-line-indent: 2em
+  align: justify
 """
 
 
@@ -131,6 +143,21 @@ title: 测试文档
 
 ## 子标题
 
+### 三级标题
+
+#### 四级标题
+
+1. 第一层第一项
+   1. 第二层第一项
+      1. 第三层第一项
+   2. 第二层第二项
+2. 第一层第二项
+
+分隔两个独立列表。
+
+3. 指定起始值
+4. 指定起始值的下一项
+
 $$
 \\frac{a}{b} = c
 $$
@@ -153,6 +180,30 @@ $$
     assert document.paragraphs[0].style.name == "MD2DOCX Title"
     assert any(p.text == "概述" and p.style.name == "Heading 1" for p in document.paragraphs)
     assert any(p.text == "子标题" and p.style.name == "Heading 2" for p in document.paragraphs)
+    assert any(p.text == "三级标题" and p.style.name == "Heading 3" for p in document.paragraphs)
+    assert any(p.text == "四级标题" and p.style.name == "Heading 4" for p in document.paragraphs)
+    heading_paragraphs = [
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.style.name.startswith("Heading ")
+    ]
+    assert heading_paragraphs
+    assert all(run.bold is False for p in heading_paragraphs for run in p.runs)
+    enumerated_paragraphs = [
+        p for p in document.paragraphs if p.style.name == "List Number"
+    ]
+    assert [p.text for p in enumerated_paragraphs] == [
+        "第一层第一项",
+        "第二层第一项",
+        "第三层第一项",
+        "第二层第二项",
+        "第一层第二项",
+        "指定起始值",
+        "指定起始值的下一项",
+    ]
+    assert [
+        round(p.paragraph_format.left_indent.pt) for p in enumerated_paragraphs
+    ] == [0, 32, 64, 32, 0, 0, 0]
     assert len(document.tables) == 1
 
     with ZipFile(output) as archive:
@@ -165,8 +216,28 @@ $$
     assert 'w:val="chineseCounting"' in numbering_xml
     assert 'w:val="%1、"' in numbering_xml
     assert 'w:val="（%2）"' in numbering_xml
+    assert 'w:val="%3. "' in numbering_xml
     assert "md2docx image caption numbering" in numbering_xml
     assert 'w:val="图%1 "' in numbering_xml
+    assert "md2docx enumerated list numbering" in numbering_xml
+    assert numbering_xml.count('w:suff w:val="nothing"') >= 14
+    assert 'w:lvlText w:val="%1. "' in numbering_xml
+    assert 'w:lvlText w:val="%2. "' in numbering_xml
+    assert 'w:lvlText w:val="%3. "' in numbering_xml
+    assert 'w:left="0"' in numbering_xml
+    assert 'w:left="640"' in numbering_xml
+    assert 'w:left="1280"' in numbering_xml
+    assert '<w:startOverride w:val="3"/>' in numbering_xml
+    assert numbering_xml.count('w:pStyle w:val="ListNumber"') >= 9
+    for name in (
+        "md2docx heading numbering",
+        "md2docx image caption numbering",
+        "md2docx enumerated list numbering",
+    ):
+        custom_numbering = numbering_xml.split(name, 1)[1].split(
+            "</w:abstractNum>", 1
+        )[0]
+        assert "<w:tab" not in custom_numbering
     assert "SEQ Figure" not in document_xml
     assert 'w:pStyle w:val="ImageCaption"' in numbering_xml
     assert 'w:eastAsia="SimHei"' in numbering_xml
@@ -175,7 +246,16 @@ $$
     assert 'w:ascii="Times New Roman"' in numbering_xml
     assert 'w:sz w:val="32"' in numbering_xml
     assert 'w:szCs w:val="32"' in numbering_xml
+    assert numbering_xml.count('<w:b w:val="0"/>') >= 4
+    assert numbering_xml.count('<w:bCs w:val="0"/>') >= 4
     assert "MD2DOCXTitle" in styles_xml
+    assert "MD2DOCXEnumeratedList" not in styles_xml
+    for level in range(1, 5):
+        heading_style = styles_xml.split(
+            f'<w:style w:type="paragraph" w:styleId="Heading{level}">',
+            1,
+        )[1].split("</w:style>", 1)[0]
+        assert '<w:b w:val="0"/>' in heading_style
     assert "w:pBdr" not in document_xml.split("测试文档", 1)[0][-500:]
     assert 'w:color w:val="000000"' in styles_xml
     assert 'w:before="60" w:after="80" w:line="240"' in document_xml

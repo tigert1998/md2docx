@@ -17,7 +17,13 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from PIL import Image
 
-from .config import BlockStyle, TextStyle, apply_style_to_paragraph, load_config
+from .config import (
+    BlockStyle,
+    EnumeratedListStyle,
+    TextStyle,
+    apply_style_to_paragraph,
+    load_config,
+)
 from .math_render import render_latex
 
 
@@ -114,6 +120,13 @@ def _numbering_run_properties(style: TextStyle) -> Any:
     size_cs = OxmlElement("w:szCs")
     size_cs.set(qn("w:val"), half_points)
     rpr.append(size_cs)
+
+    bold = OxmlElement("w:b")
+    bold.set(qn("w:val"), "0")
+    rpr.append(bold)
+    bold_cs = OxmlElement("w:bCs")
+    bold_cs.set(qn("w:val"), "0")
+    rpr.append(bold_cs)
     return rpr
 
 
@@ -227,6 +240,87 @@ def _install_caption_numbering(document: Any, style: TextStyle) -> int:
     return num_id
 
 
+def _install_enumerated_list_numbering(
+    document: Any, style: EnumeratedListStyle
+) -> int:
+    if style.numbering is None:
+        raise ValueError("enumerated-list.numbering must not be null")
+
+    numbering = document.part.numbering_part.element
+    abstract_id = _next_numbering_id(numbering, "abstractNum", "abstractNumId")
+    abstract = OxmlElement("w:abstractNum")
+    abstract.set(qn("w:abstractNumId"), str(abstract_id))
+    multi = OxmlElement("w:multiLevelType")
+    multi.set(qn("w:val"), "multilevel")
+    abstract.append(multi)
+    name = OxmlElement("w:name")
+    name.set(qn("w:val"), "md2docx enumerated list numbering")
+    abstract.append(name)
+
+    for level in range(9):
+        lvl = OxmlElement("w:lvl")
+        lvl.set(qn("w:ilvl"), str(level))
+        start = OxmlElement("w:start")
+        start.set(qn("w:val"), "1")
+        lvl.append(start)
+        if level > 0:
+            restart = OxmlElement("w:lvlRestart")
+            restart.set(qn("w:val"), str(level))
+            lvl.append(restart)
+
+        number_format, level_text = _numbering_level(style.numbering, level)
+        num_fmt = OxmlElement("w:numFmt")
+        num_fmt.set(qn("w:val"), number_format)
+        lvl.append(num_fmt)
+        text = OxmlElement("w:lvlText")
+        text.set(qn("w:val"), level_text)
+        lvl.append(text)
+        suffix = OxmlElement("w:suff")
+        suffix.set(qn("w:val"), "nothing")
+        lvl.append(suffix)
+        paragraph_style = OxmlElement("w:pStyle")
+        paragraph_style.set(qn("w:val"), "ListNumber")
+        lvl.append(paragraph_style)
+        justification = OxmlElement("w:lvlJc")
+        justification.set(qn("w:val"), "left")
+        lvl.append(justification)
+
+        paragraph_properties = OxmlElement("w:pPr")
+        indent = OxmlElement("w:ind")
+        left_twips = round(
+            style.size_pt * style.indent_before_text_increment_em * level * 20
+        )
+        indent.set(qn("w:left"), str(left_twips))
+        paragraph_properties.append(indent)
+        lvl.append(paragraph_properties)
+        lvl.append(_numbering_run_properties(style))
+        abstract.append(lvl)
+
+    numbering.append(abstract)
+    return abstract_id
+
+
+def _create_numbering_instance(
+    document: Any, abstract_id: int, *, level: int = 0, start: int = 1
+) -> int:
+    numbering = document.part.numbering_part.element
+    num_id = _next_numbering_id(numbering, "num", "numId")
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), str(num_id))
+    abstract_ref = OxmlElement("w:abstractNumId")
+    abstract_ref.set(qn("w:val"), str(abstract_id))
+    num.append(abstract_ref)
+    if start != 1:
+        override = OxmlElement("w:lvlOverride")
+        override.set(qn("w:ilvl"), str(level))
+        start_override = OxmlElement("w:startOverride")
+        start_override.set(qn("w:val"), str(start))
+        override.append(start_override)
+        num.append(override)
+    numbering.append(num)
+    return num_id
+
+
 def _set_style_numbering(style: Any, num_id: int, level: int, enabled: bool) -> None:
     ppr = style.element.get_or_add_pPr()
     existing = ppr.find(qn("w:numPr"))
@@ -237,6 +331,20 @@ def _set_style_numbering(style: Any, num_id: int, level: int, enabled: bool) -> 
     num_pr = OxmlElement("w:numPr")
     ilvl = OxmlElement("w:ilvl")
     ilvl.set(qn("w:val"), str(level - 1))
+    num = OxmlElement("w:numId")
+    num.set(qn("w:val"), str(num_id))
+    num_pr.extend([ilvl, num])
+    ppr.append(num_pr)
+
+
+def _set_paragraph_numbering(paragraph: Any, num_id: int, level: int) -> None:
+    ppr = paragraph._p.get_or_add_pPr()
+    existing = ppr.find(qn("w:numPr"))
+    if existing is not None:
+        ppr.remove(existing)
+    num_pr = OxmlElement("w:numPr")
+    ilvl = OxmlElement("w:ilvl")
+    ilvl.set(qn("w:val"), str(level))
     num = OxmlElement("w:numId")
     num.set(qn("w:val"), str(num_id))
     num_pr.extend([ilvl, num])
@@ -298,7 +406,9 @@ def _set_table_geometry(table: Any, widths: list[int]) -> None:
 
 class DocxBuilder:
     def __init__(
-        self, styles: dict[str, BlockStyle | TextStyle], source_dir: Path
+        self,
+        styles: dict[str, BlockStyle | TextStyle | EnumeratedListStyle],
+        source_dir: Path,
     ):
         self.styles = styles
         self.source_dir = source_dir
@@ -315,6 +425,14 @@ class DocxBuilder:
         style = self.styles.get(name)
         if style is None:
             raise ValueError(f"missing required configuration section: {name}")
+        return style
+
+    def enumerated_list_style(self) -> EnumeratedListStyle:
+        style = self.styles.get("enumerated-list")
+        if not isinstance(style, EnumeratedListStyle):
+            raise ValueError(
+                "configuration section enumerated-list is not an enumerated-list style"
+            )
         return style
 
     def _configure_document(self) -> None:
@@ -350,6 +468,7 @@ class DocxBuilder:
         for level, config_style in heading_styles:
             word_style = self.document.styles[f"Heading {level}"]
             self._configure_word_style(word_style, config_style)
+            word_style.font.bold = False
             _set_style_numbering(
                 word_style, num_id, level, config_style.numbering is not None
             )
@@ -366,6 +485,14 @@ class DocxBuilder:
         )
         _set_style_numbering(
             self.document.styles["Image Caption"], caption_num_id, 1, True
+        )
+        enumerated_style = self.enumerated_list_style()
+        list_style = self.document.styles["List Number"]
+        self._configure_word_style(list_style, enumerated_style)
+        list_style.font.bold = False
+        _set_style_numbering(list_style, 0, 1, False)
+        self.enumerated_list_abstract_id = _install_enumerated_list_numbering(
+            self.document, enumerated_style
         )
 
     @staticmethod
@@ -551,21 +678,55 @@ class DocxBuilder:
                         run.bold = True
         _set_table_geometry(table, widths)
 
-    def add_list(self, token: dict[str, Any], level: int = 0) -> None:
+    def add_list(
+        self,
+        token: dict[str, Any],
+        level: int = 0,
+        ordered_num_id: int | None = None,
+    ) -> None:
         ordered = bool(token.get("attrs", {}).get("ordered"))
+        if ordered and ordered_num_id is None:
+            start = int(token.get("attrs", {}).get("start", 1))
+            ordered_num_id = _create_numbering_instance(
+                self.document,
+                self.enumerated_list_abstract_id,
+                level=min(level, 8),
+                start=start,
+            )
         for item in token.get("children", []):
             for block in item.get("children", []):
                 if block["type"] == "list":
-                    self.add_list(block, level + 1)
+                    nested_ordered = bool(block.get("attrs", {}).get("ordered"))
+                    self.add_list(
+                        block,
+                        level + 1,
+                        ordered_num_id if ordered and nested_ordered else None,
+                    )
                     continue
-                style_base = "List Number" if ordered else "List Bullet"
-                style_name = (
-                    style_base if level == 0 else f"{style_base} {min(level + 1, 3)}"
-                )
-                paragraph = self.document.add_paragraph(style=style_name)
-                style = self.text_style("body")
+                if ordered:
+                    style = self.enumerated_list_style()
+                    paragraph = self.document.add_paragraph(style="List Number")
+                    _set_paragraph_numbering(
+                        paragraph, ordered_num_id, min(level, 8)
+                    )
+                else:
+                    style_base = "List Bullet"
+                    style_name = (
+                        style_base
+                        if level == 0
+                        else f"{style_base} {min(level + 1, 3)}"
+                    )
+                    paragraph = self.document.add_paragraph(style=style_name)
+                    style = self.text_style("body")
                 apply_style_to_paragraph(paragraph, style)
-                paragraph.paragraph_format.first_line_indent = None
+                if ordered:
+                    paragraph.paragraph_format.left_indent = Pt(
+                        style.size_pt
+                        * style.indent_before_text_increment_em
+                        * min(level, 8)
+                    )
+                else:
+                    paragraph.paragraph_format.first_line_indent = None
                 self.add_inline_nodes(paragraph, block.get("children", []), style)
 
     def add_code_block(self, token: dict[str, Any]) -> None:

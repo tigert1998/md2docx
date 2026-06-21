@@ -22,6 +22,9 @@ TEXT_FIELDS = {
     "align",
 }
 NUMBERED_TEXT_FIELDS = TEXT_FIELDS | {"numbering"}
+ENUMERATED_LIST_FIELDS = NUMBERED_TEXT_FIELDS | {
+    "indent-before-text-increment"
+}
 BLOCK_FIELDS = {"space-before", "space-after", "line-spacing", "align"}
 REQUIRED_SECTIONS = {
     "title",
@@ -33,6 +36,7 @@ REQUIRED_SECTIONS = {
     "image",
     "image-caption",
     "math-block",
+    "enumerated-list",
 }
 
 
@@ -58,6 +62,11 @@ class TextStyle(BlockStyle):
     color: RGBColor
     numbering: str | None
     first_line_indent_em: float | None
+
+
+@dataclass(frozen=True)
+class EnumeratedListStyle(TextStyle):
+    indent_before_text_increment_em: float
 
 
 def _require_mapping(data: dict[str, Any], section: str) -> dict[str, Any]:
@@ -151,7 +160,28 @@ def _text_style(section: str, data: dict[str, Any], *, numbered: bool) -> TextSt
     )
 
 
-def load_config(path: str | Path) -> dict[str, BlockStyle | TextStyle]:
+def _enumerated_list_style(
+    section: str, data: dict[str, Any]
+) -> EnumeratedListStyle:
+    _require_fields(section, data, ENUMERATED_LIST_FIELDS)
+    base = _text_style(section, data, numbered=True)
+    increment = _indent_em(
+        data["indent-before-text-increment"],
+        f"{section}.indent-before-text-increment",
+    )
+    if increment is None or increment < 0:
+        raise ValueError(
+            f"{section}.indent-before-text-increment must be a non-negative em value"
+        )
+    return EnumeratedListStyle(
+        **base.__dict__,
+        indent_before_text_increment_em=increment,
+    )
+
+
+def load_config(
+    path: str | Path,
+) -> dict[str, BlockStyle | TextStyle | EnumeratedListStyle]:
     path = Path(path)
     with path.open("r", encoding="utf-8") as stream:
         loaded = yaml.safe_load(stream)
@@ -176,6 +206,9 @@ def load_config(path: str | Path) -> dict[str, BlockStyle | TextStyle]:
         ),
         "math-block": _block_style(
             "math-block", _require_mapping(loaded, "math-block")
+        ),
+        "enumerated-list": _enumerated_list_style(
+            "enumerated-list", _require_mapping(loaded, "enumerated-list")
         ),
     }
     heading_names = sorted(
