@@ -190,7 +190,7 @@ $$
     assert heading_paragraphs
     assert all(run.bold is False for p in heading_paragraphs for run in p.runs)
     enumerated_paragraphs = [
-        p for p in document.paragraphs if p.style.name == "List Number"
+        p for p in document.paragraphs if p.style.name.startswith("List Number")
     ]
     assert [p.text for p in enumerated_paragraphs] == [
         "第一层第一项",
@@ -201,9 +201,19 @@ $$
         "指定起始值",
         "指定起始值的下一项",
     ]
+    assert [p.style.name for p in enumerated_paragraphs] == [
+        "List Number",
+        "List Number 2",
+        "List Number 3",
+        "List Number 2",
+        "List Number",
+        "List Number",
+        "List Number",
+    ]
     assert [
-        round(p.paragraph_format.left_indent.pt) for p in enumerated_paragraphs
-    ] == [0, 32, 64, 32, 0, 0, 0]
+        round(document.styles[name].paragraph_format.left_indent.pt)
+        for name in ("List Number", "List Number 2", "List Number 3")
+    ] == [0, 32, 64]
     assert len(document.tables) == 1
 
     with ZipFile(output) as archive:
@@ -227,8 +237,9 @@ $$
     assert 'w:left="0"' in numbering_xml
     assert 'w:left="640"' in numbering_xml
     assert 'w:left="1280"' in numbering_xml
-    assert '<w:startOverride w:val="3"/>' in numbering_xml
-    assert numbering_xml.count('w:pStyle w:val="ListNumber"') >= 9
+    assert 'w:pStyle w:val="ListNumber"' in numbering_xml
+    assert 'w:pStyle w:val="ListNumber2"' in numbering_xml
+    assert 'w:pStyle w:val="ListNumber3"' in numbering_xml
     for name in (
         "md2docx heading numbering",
         "md2docx image caption numbering",
@@ -248,8 +259,26 @@ $$
     assert 'w:szCs w:val="32"' in numbering_xml
     assert numbering_xml.count('<w:b w:val="0"/>') >= 4
     assert numbering_xml.count('<w:bCs w:val="0"/>') >= 4
+    assert numbering_xml.count('<w:i w:val="0"/>') >= 4
+    assert numbering_xml.count('<w:iCs w:val="0"/>') >= 4
+    heading_numbering = numbering_xml.split(
+        "md2docx heading numbering", 1
+    )[1].split("</w:abstractNum>", 1)[0]
+    h4_numbering = heading_numbering.split(
+        '<w:lvl w:ilvl="3">', 1
+    )[1].split("</w:lvl>", 1)[0]
+    assert '<w:i w:val="0"/>' in h4_numbering
+    assert '<w:iCs w:val="0"/>' in h4_numbering
     assert "MD2DOCXTitle" in styles_xml
     assert "MD2DOCXEnumeratedList" not in styles_xml
+    for style_id in ("ListNumber", "ListNumber2", "ListNumber3"):
+        list_style = styles_xml.split(
+            f'<w:style w:type="paragraph" w:styleId="{style_id}">',
+            1,
+        )[1].split("</w:style>", 1)[0]
+        assert "<w:numPr>" in list_style
+    for paragraph in enumerated_paragraphs:
+        assert paragraph._p.pPr.numPr is None
     for level in range(1, 5):
         heading_style = styles_xml.split(
             f'<w:style w:type="paragraph" w:styleId="Heading{level}">',

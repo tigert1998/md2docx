@@ -127,6 +127,12 @@ def _numbering_run_properties(style: TextStyle) -> Any:
     bold_cs = OxmlElement("w:bCs")
     bold_cs.set(qn("w:val"), "0")
     rpr.append(bold_cs)
+    italic = OxmlElement("w:i")
+    italic.set(qn("w:val"), "0")
+    rpr.append(italic)
+    italic_cs = OxmlElement("w:iCs")
+    italic_cs.set(qn("w:val"), "0")
+    rpr.append(italic_cs)
     return rpr
 
 
@@ -248,6 +254,7 @@ def _install_enumerated_list_numbering(
 
     numbering = document.part.numbering_part.element
     abstract_id = _next_numbering_id(numbering, "abstractNum", "abstractNumId")
+    num_id = _next_numbering_id(numbering, "num", "numId")
     abstract = OxmlElement("w:abstractNum")
     abstract.set(qn("w:abstractNumId"), str(abstract_id))
     multi = OxmlElement("w:multiLevelType")
@@ -279,7 +286,7 @@ def _install_enumerated_list_numbering(
         suffix.set(qn("w:val"), "nothing")
         lvl.append(suffix)
         paragraph_style = OxmlElement("w:pStyle")
-        paragraph_style.set(qn("w:val"), "ListNumber")
+        paragraph_style.set(qn("w:val"), f"ListNumber{level + 1 if level else ''}")
         lvl.append(paragraph_style)
         justification = OxmlElement("w:lvlJc")
         justification.set(qn("w:val"), "left")
@@ -297,26 +304,11 @@ def _install_enumerated_list_numbering(
         abstract.append(lvl)
 
     numbering.append(abstract)
-    return abstract_id
-
-
-def _create_numbering_instance(
-    document: Any, abstract_id: int, *, level: int = 0, start: int = 1
-) -> int:
-    numbering = document.part.numbering_part.element
-    num_id = _next_numbering_id(numbering, "num", "numId")
     num = OxmlElement("w:num")
     num.set(qn("w:numId"), str(num_id))
     abstract_ref = OxmlElement("w:abstractNumId")
     abstract_ref.set(qn("w:val"), str(abstract_id))
     num.append(abstract_ref)
-    if start != 1:
-        override = OxmlElement("w:lvlOverride")
-        override.set(qn("w:ilvl"), str(level))
-        start_override = OxmlElement("w:startOverride")
-        start_override.set(qn("w:val"), str(start))
-        override.append(start_override)
-        num.append(override)
     numbering.append(num)
     return num_id
 
@@ -331,20 +323,6 @@ def _set_style_numbering(style: Any, num_id: int, level: int, enabled: bool) -> 
     num_pr = OxmlElement("w:numPr")
     ilvl = OxmlElement("w:ilvl")
     ilvl.set(qn("w:val"), str(level - 1))
-    num = OxmlElement("w:numId")
-    num.set(qn("w:val"), str(num_id))
-    num_pr.extend([ilvl, num])
-    ppr.append(num_pr)
-
-
-def _set_paragraph_numbering(paragraph: Any, num_id: int, level: int) -> None:
-    ppr = paragraph._p.get_or_add_pPr()
-    existing = ppr.find(qn("w:numPr"))
-    if existing is not None:
-        ppr.remove(existing)
-    num_pr = OxmlElement("w:numPr")
-    ilvl = OxmlElement("w:ilvl")
-    ilvl.set(qn("w:val"), str(level))
     num = OxmlElement("w:numId")
     num.set(qn("w:val"), str(num_id))
     num_pr.extend([ilvl, num])
@@ -487,13 +465,29 @@ class DocxBuilder:
             self.document.styles["Image Caption"], caption_num_id, 1, True
         )
         enumerated_style = self.enumerated_list_style()
-        list_style = self.document.styles["List Number"]
-        self._configure_word_style(list_style, enumerated_style)
-        list_style.font.bold = False
-        _set_style_numbering(list_style, 0, 1, False)
-        self.enumerated_list_abstract_id = _install_enumerated_list_numbering(
+        enumerated_num_id = _install_enumerated_list_numbering(
             self.document, enumerated_style
         )
+        for level in range(9):
+            style_name = self._list_number_style_name(level)
+            if style_name not in self.document.styles:
+                list_style = self.document.styles.add_style(
+                    style_name, WD_STYLE_TYPE.PARAGRAPH
+                )
+                list_style.base_style = self.document.styles["List Number"]
+            else:
+                list_style = self.document.styles[style_name]
+            self._configure_word_style(list_style, enumerated_style)
+            list_style.font.bold = False
+            list_style.font.italic = False
+            list_style.paragraph_format.left_indent = Pt(
+                enumerated_style.size_pt
+                * enumerated_style.indent_before_text_increment_em
+                * level
+            )
+            _set_style_numbering(
+                list_style, enumerated_num_id, level + 1, True
+            )
 
     @staticmethod
     def _configure_word_style(word_style: Any, config: TextStyle) -> None:
@@ -510,6 +504,10 @@ class DocxBuilder:
         rfonts.set(qn("w:eastAsia"), config.chinese_font)
         rfonts.set(qn("w:cs"), config.latin_font)
         apply_style_to_paragraph(word_style, config)
+
+    @staticmethod
+    def _list_number_style_name(level: int) -> str:
+        return "List Number" if level == 0 else f"List Number {level + 1}"
 
     def add_title(self, title: str) -> None:
         style = self.text_style("title")
@@ -678,36 +676,17 @@ class DocxBuilder:
                         run.bold = True
         _set_table_geometry(table, widths)
 
-    def add_list(
-        self,
-        token: dict[str, Any],
-        level: int = 0,
-        ordered_num_id: int | None = None,
-    ) -> None:
+    def add_list(self, token: dict[str, Any], level: int = 0) -> None:
         ordered = bool(token.get("attrs", {}).get("ordered"))
-        if ordered and ordered_num_id is None:
-            start = int(token.get("attrs", {}).get("start", 1))
-            ordered_num_id = _create_numbering_instance(
-                self.document,
-                self.enumerated_list_abstract_id,
-                level=min(level, 8),
-                start=start,
-            )
         for item in token.get("children", []):
             for block in item.get("children", []):
                 if block["type"] == "list":
-                    nested_ordered = bool(block.get("attrs", {}).get("ordered"))
-                    self.add_list(
-                        block,
-                        level + 1,
-                        ordered_num_id if ordered and nested_ordered else None,
-                    )
+                    self.add_list(block, level + 1)
                     continue
                 if ordered:
                     style = self.enumerated_list_style()
-                    paragraph = self.document.add_paragraph(style="List Number")
-                    _set_paragraph_numbering(
-                        paragraph, ordered_num_id, min(level, 8)
+                    paragraph = self.document.add_paragraph(
+                        style=self._list_number_style_name(min(level, 8))
                     )
                 else:
                     style_base = "List Bullet"
@@ -718,14 +697,8 @@ class DocxBuilder:
                     )
                     paragraph = self.document.add_paragraph(style=style_name)
                     style = self.text_style("body")
-                apply_style_to_paragraph(paragraph, style)
-                if ordered:
-                    paragraph.paragraph_format.left_indent = Pt(
-                        style.size_pt
-                        * style.indent_before_text_increment_em
-                        * min(level, 8)
-                    )
-                else:
+                if not ordered:
+                    apply_style_to_paragraph(paragraph, style)
                     paragraph.paragraph_format.first_line_indent = None
                 self.add_inline_nodes(paragraph, block.get("children", []), style)
 
