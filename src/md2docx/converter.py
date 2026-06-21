@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 import re
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
 
 import mistune
@@ -363,7 +363,7 @@ class DocxBuilder:
         if parsed.scheme in {"http", "https"}:
             with urlopen(url, timeout=20) as response:
                 return BytesIO(response.read())
-        path = Path(url)
+        path = Path(unquote(url))
         if not path.is_absolute():
             path = self.source_dir / path
         if not path.is_file():

@@ -318,3 +318,27 @@ $$
     assert 'w:before="60" w:after="80" w:line="240"' in document_xml
     assert 'w:before="20" w:after="40" w:line="240"' in document_xml
     assert len(media) >= 3
+
+
+def test_local_image_path_supports_chinese_characters(tmp_path: Path) -> None:
+    image_name = "结算包拓扑关系示意图.png"
+    Image.new("RGB", (32, 16), "steelblue").save(tmp_path / image_name)
+    markdown_path = tmp_path / "中文文档.md"
+    markdown_path.write_text(
+        f"""---
+title: 中文图片路径测试
+---
+
+![拓扑关系]({image_name})
+""",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(CONFIG, encoding="utf-8")
+    output = tmp_path / "输出文档.docx"
+
+    convert_markdown(markdown_path, output, config_path)
+
+    with ZipFile(output) as archive:
+        media = [name for name in archive.namelist() if name.startswith("word/media/")]
+    assert media
