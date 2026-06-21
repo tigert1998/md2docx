@@ -66,4 +66,4 @@ $$
 - `align` 可取 `left`、`center`、`right`、`justify`
 - `color` 使用六位十六进制颜色，例如 `#000000`
 - 标题 `numbering` 可使用示例模板，也可使用 `{n}` 和 `{cn}` 占位符；生成结果是可继续编辑的 Word 原生编号
-- 图片图注编号使用 Word `SEQ` 域，打开 Word 后可统一更新域
+- 图片图注编号使用绑定到 `Image Caption` 样式的 Word 原生单级编号，可在 Word 中继续插入并自动递增

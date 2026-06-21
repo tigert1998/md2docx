@@ -159,15 +159,22 @@ $$
         document_xml = archive.read("word/document.xml").decode("utf-8")
         styles_xml = archive.read("word/styles.xml").decode("utf-8")
         numbering_xml = archive.read("word/numbering.xml").decode("utf-8")
-        settings_xml = archive.read("word/settings.xml").decode("utf-8")
         media = [name for name in archive.namelist() if name.startswith("word/media/")]
 
     assert "md2docx heading numbering" in numbering_xml
     assert 'w:val="chineseCounting"' in numbering_xml
     assert 'w:val="%1、"' in numbering_xml
     assert 'w:val="（%2）"' in numbering_xml
-    assert "SEQ Figure" in document_xml
-    assert "updateFields" in settings_xml
+    assert "md2docx image caption numbering" in numbering_xml
+    assert 'w:val="图%1 "' in numbering_xml
+    assert "SEQ Figure" not in document_xml
+    assert 'w:pStyle w:val="ImageCaption"' in numbering_xml
+    assert 'w:eastAsia="SimHei"' in numbering_xml
+    assert 'w:eastAsia="KaiTi"' in numbering_xml
+    assert 'w:eastAsia="FangSong"' in numbering_xml
+    assert 'w:ascii="Times New Roman"' in numbering_xml
+    assert 'w:sz w:val="32"' in numbering_xml
+    assert 'w:szCs w:val="32"' in numbering_xml
     assert "MD2DOCXTitle" in styles_xml
     assert "w:pBdr" not in document_xml.split("测试文档", 1)[0][-500:]
     assert 'w:color w:val="000000"' in styles_xml

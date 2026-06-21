@@ -94,6 +94,29 @@ def _next_numbering_id(numbering: Any, tag: str, attr: str) -> int:
     return max(values, default=0) + 1
 
 
+def _numbering_run_properties(style: TextStyle) -> Any:
+    rpr = OxmlElement("w:rPr")
+    fonts = OxmlElement("w:rFonts")
+    fonts.set(qn("w:ascii"), style.latin_font)
+    fonts.set(qn("w:hAnsi"), style.latin_font)
+    fonts.set(qn("w:eastAsia"), style.chinese_font)
+    fonts.set(qn("w:cs"), style.latin_font)
+    rpr.append(fonts)
+
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), str(style.color))
+    rpr.append(color)
+
+    half_points = str(round(style.size_pt * 2))
+    size = OxmlElement("w:sz")
+    size.set(qn("w:val"), half_points)
+    rpr.append(size)
+    size_cs = OxmlElement("w:szCs")
+    size_cs.set(qn("w:val"), half_points)
+    rpr.append(size_cs)
+    return rpr
+
+
 def _install_heading_numbering(
     document: Any, heading_styles: list[tuple[int, TextStyle]]
 ) -> int:
@@ -140,9 +163,61 @@ def _install_heading_numbering(
         justification = OxmlElement("w:lvlJc")
         justification.set(qn("w:val"), "left")
         lvl.append(justification)
+        lvl.append(_numbering_run_properties(style))
         abstract.append(lvl)
 
     numbering.append(abstract)
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), str(num_id))
+    abstract_ref = OxmlElement("w:abstractNumId")
+    abstract_ref.set(qn("w:val"), str(abstract_id))
+    num.append(abstract_ref)
+    numbering.append(num)
+    return num_id
+
+
+def _install_caption_numbering(document: Any, style: TextStyle) -> int:
+    if style.numbering is None:
+        raise ValueError("image-caption.numbering must not be null")
+
+    numbering = document.part.numbering_part.element
+    abstract_id = _next_numbering_id(numbering, "abstractNum", "abstractNumId")
+    num_id = _next_numbering_id(numbering, "num", "numId")
+    number_format, level_text = _numbering_level(style.numbering, 0)
+
+    abstract = OxmlElement("w:abstractNum")
+    abstract.set(qn("w:abstractNumId"), str(abstract_id))
+    multi = OxmlElement("w:multiLevelType")
+    multi.set(qn("w:val"), "singleLevel")
+    abstract.append(multi)
+    name = OxmlElement("w:name")
+    name.set(qn("w:val"), "md2docx image caption numbering")
+    abstract.append(name)
+
+    lvl = OxmlElement("w:lvl")
+    lvl.set(qn("w:ilvl"), "0")
+    start = OxmlElement("w:start")
+    start.set(qn("w:val"), "1")
+    lvl.append(start)
+    num_fmt = OxmlElement("w:numFmt")
+    num_fmt.set(qn("w:val"), number_format)
+    lvl.append(num_fmt)
+    text = OxmlElement("w:lvlText")
+    text.set(qn("w:val"), level_text)
+    lvl.append(text)
+    suffix = OxmlElement("w:suff")
+    suffix.set(qn("w:val"), "nothing")
+    lvl.append(suffix)
+    paragraph_style = OxmlElement("w:pStyle")
+    paragraph_style.set(qn("w:val"), "ImageCaption")
+    lvl.append(paragraph_style)
+    justification = OxmlElement("w:lvlJc")
+    justification.set(qn("w:val"), "left")
+    lvl.append(justification)
+    lvl.append(_numbering_run_properties(style))
+    abstract.append(lvl)
+    numbering.append(abstract)
+
     num = OxmlElement("w:num")
     num.set(qn("w:numId"), str(num_id))
     abstract_ref = OxmlElement("w:abstractNumId")
@@ -166,54 +241,6 @@ def _set_style_numbering(style: Any, num_id: int, level: int, enabled: bool) -> 
     num.set(qn("w:val"), str(num_id))
     num_pr.extend([ilvl, num])
     ppr.append(num_pr)
-
-
-def _enable_field_updates(document: Any) -> None:
-    settings = document.settings.element
-    update = settings.find(qn("w:updateFields"))
-    if update is None:
-        update = OxmlElement("w:updateFields")
-        settings.append(update)
-    update.set(qn("w:val"), "true")
-
-
-def _append_seq_field(paragraph: Any, name: str, cached_value: int, style: TextStyle) -> None:
-    begin_run = paragraph.add_run()
-    begin = OxmlElement("w:fldChar")
-    begin.set(qn("w:fldCharType"), "begin")
-    begin_run._r.append(begin)
-
-    instr_run = paragraph.add_run()
-    instr = OxmlElement("w:instrText")
-    instr.set(qn("xml:space"), "preserve")
-    instr.text = f" SEQ {name} \\* ARABIC "
-    instr_run._r.append(instr)
-
-    separate_run = paragraph.add_run()
-    separate = OxmlElement("w:fldChar")
-    separate.set(qn("w:fldCharType"), "separate")
-    separate_run._r.append(separate)
-
-    result_run = paragraph.add_run(str(cached_value))
-    _set_run_style(result_run, style)
-
-    end_run = paragraph.add_run()
-    end = OxmlElement("w:fldChar")
-    end.set(qn("w:fldCharType"), "end")
-    end_run._r.append(end)
-
-
-def _caption_pattern(pattern: str | None) -> tuple[str, str]:
-    if pattern is None:
-        return "", ""
-    if "{n}" in pattern:
-        return tuple(pattern.split("{n}", 1))  # type: ignore[return-value]
-    match = re.search(r"\d+", pattern)
-    if not match:
-        raise ValueError(
-            "image-caption.numbering must contain a decimal number or {n}"
-        )
-    return pattern[: match.start()], pattern[match.end() :]
 
 
 def _shade_cell(cell: Any, fill: str) -> None:
@@ -276,7 +303,6 @@ class DocxBuilder:
         self.styles = styles
         self.source_dir = source_dir
         self.document = Document()
-        self.figure_count = 0
         self._configure_document()
 
     def text_style(self, name: str) -> TextStyle:
@@ -299,8 +325,6 @@ class DocxBuilder:
         section.right_margin = Inches(1)
         section.page_width = Inches(8.5)
         section.page_height = Inches(11)
-        _enable_field_updates(self.document)
-
         if "MD2DOCX Title" not in self.document.styles:
             title_style = self.document.styles.add_style(
                 "MD2DOCX Title", WD_STYLE_TYPE.PARAGRAPH
@@ -336,6 +360,12 @@ class DocxBuilder:
         self._configure_word_style(
             self.document.styles["Image Caption"],
             self.text_style("image-caption"),
+        )
+        caption_num_id = _install_caption_numbering(
+            self.document, self.text_style("image-caption")
+        )
+        _set_style_numbering(
+            self.document.styles["Image Caption"], caption_num_id, 1, True
         )
 
     @staticmethod
@@ -475,16 +505,10 @@ class DocxBuilder:
 
         caption = self._plain_text(token.get("children", []))
         if caption:
-            self.figure_count += 1
             style = self.text_style("image-caption")
             p = self.document.add_paragraph(style="Image Caption")
             apply_style_to_paragraph(p, style)
-            prefix, suffix = _caption_pattern(style.numbering)
-            if prefix:
-                run = p.add_run(prefix)
-                _set_run_style(run, style)
-            _append_seq_field(p, "Figure", self.figure_count, style)
-            run = p.add_run(suffix + caption)
+            run = p.add_run(caption)
             _set_run_style(run, style)
 
     def add_table(self, token: dict[str, Any]) -> None:
