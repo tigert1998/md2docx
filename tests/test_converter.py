@@ -10,7 +10,6 @@ from md2docx.config import REQUIRED_SECTIONS, apply_config_to_style, load_config
 from md2docx.converter import convert_markdown, parse_frontmatter
 from md2docx.math_render import render_latex
 
-
 PROJECT_ROOT = Path(__file__).parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 CONFIG = CONFIG_PATH.read_text(encoding="utf-8")
@@ -43,7 +42,9 @@ def test_real_config_is_the_strict_schema(tmp_path: Path) -> None:
     assert styles["ordered-list"].hanging_indent is not None
 
     config = tmp_path / "config.yaml"
-    config.write_text(CONFIG.replace("inline-code:", "missing-inline-code:", 1), encoding="utf-8")
+    config.write_text(
+        CONFIG.replace("inline-code:", "missing-inline-code:", 1), encoding="utf-8"
+    )
     with pytest.raises(
         ValueError, match="missing required configuration section.*inline-code"
     ):
@@ -111,9 +112,14 @@ $$
     document = Document(output)
     assert document.paragraphs[0].style.name == "title"
     assert next(p for p in document.paragraphs if p.text == "概述").style.name == "h1"
-    assert next(p for p in document.paragraphs if p.text == "code block").style.name == "code-block"
+    assert (
+        next(p for p in document.paragraphs if p.text == "code block").style.name
+        == "code-block"
+    )
 
-    ordered = [p for p in document.paragraphs if p.style.name.startswith("ordered-list-")]
+    ordered = [
+        p for p in document.paragraphs if p.style.name.startswith("ordered-list-")
+    ]
     unordered = [
         p for p in document.paragraphs if p.style.name.startswith("unordered-list-")
     ]
@@ -131,7 +137,9 @@ $$
         for level in range(1, 4)
     ] == [32, 64, 96]
     assert [
-        round(document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt)
+        round(
+            document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt
+        )
         for level in range(1, 3)
     ] == [32, 64]
     assert [
@@ -211,15 +219,19 @@ def test_markdown_without_frontmatter_has_no_title_paragraph(tmp_path: Path) -> 
     convert_markdown(markdown, output, CONFIG_PATH)
 
     document = Document(output)
-    assert [paragraph.text for paragraph in document.paragraphs] == ["正文标题", "正文。"]
+    assert [paragraph.text for paragraph in document.paragraphs] == [
+        "正文标题",
+        "正文。",
+    ]
     assert all(paragraph.style.name != "title" for paragraph in document.paragraphs)
 
 
 def test_space_before_and_after_support_em_lengths(tmp_path: Path) -> None:
     config = tmp_path / "config.yaml"
     config.write_text(
-        CONFIG.replace('  space-before: "28pt"', '  space-before: "1em"', 1)
-        .replace('  space-after: "28pt"', '  space-after: "0.5em"', 1),
+        CONFIG.replace('  space-before: "28pt"', '  space-before: "1em"', 1).replace(
+            '  space-after: "28pt"', '  space-after: "0.5em"', 1
+        ),
         encoding="utf-8",
     )
 
@@ -262,9 +274,7 @@ def test_svg_is_embedded_directly_without_raster_fallback(tmp_path: Path) -> Non
         assert archive.read(media[0]) == svg
         content_types = archive.read("[Content_Types].xml").decode("utf-8")
         document_xml = archive.read("word/document.xml").decode("utf-8")
-        relationships = archive.read(
-            "word/_rels/document.xml.rels"
-        ).decode("utf-8")
+        relationships = archive.read("word/_rels/document.xml.rels").decode("utf-8")
 
     assert 'ContentType="image/svg+xml"' in content_types
     assert "svgBlip" in document_xml

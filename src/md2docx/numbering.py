@@ -151,9 +151,7 @@ def install_caption_numbering(document: Any, style: StyleConfig) -> int:
     return _install(numbering, abstract, abstract_id)
 
 
-def install_list_numbering(
-    document: Any, style: StyleConfig, *, ordered: bool
-) -> int:
+def install_list_numbering(document: Any, style: StyleConfig, *, ordered: bool) -> int:
     if style.numbering is None:
         raise ValueError(f"{style.name}.numbering must not be null")
     numbering, abstract, abstract_id = _new_abstract(
@@ -180,9 +178,7 @@ def install_list_numbering(
             * 20
         )
         hanging_twips = (
-            None
-            if style.hanging_indent is None
-            else round(hanging_points * 20)
+            None if style.hanging_indent is None else round(hanging_points * 20)
         )
         _append_level(
             abstract,

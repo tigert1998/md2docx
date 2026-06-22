@@ -44,7 +44,11 @@ def parse_frontmatter(source: str) -> tuple[dict[str, Any], str]:
     if not lines or lines[0].strip() != "---":
         return {}, source
     end = next(
-        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+        (
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.strip() == "---"
+        ),
         None,
     )
     if end is None:
@@ -239,7 +243,9 @@ class DocxBuilder:
         heading_num_id = install_heading_numbering(self.document, headings)
         for level, config in headings:
             if config.numbering is not None:
-                set_style_numbering(self.document.styles[config.name], heading_num_id, level)
+                set_style_numbering(
+                    self.document.styles[config.name], heading_num_id, level
+                )
 
         caption = self.style("image-caption")
         set_style_numbering(
@@ -415,7 +421,9 @@ class DocxBuilder:
         svg_blip.set(f"{{{_RELATIONSHIP_NAMESPACE}}}embed", relationship_id)
         run._r.add_drawing(inline)
 
-    def _insert_image(self, run: Any, token: dict[str, Any], *, block: bool = False) -> None:
+    def _insert_image(
+        self, run: Any, token: dict[str, Any], *, block: bool = False
+    ) -> None:
         url = token.get("attrs", {}).get("url", "")
         stream = self._image_stream(url)
         max_width = 6.5 if block else 2.0
@@ -491,7 +499,11 @@ class DocxBuilder:
         _set_table_geometry(table, widths)
 
     def add_list(self, token: dict[str, Any], level: int = 0) -> None:
-        base = "ordered-list" if token.get("attrs", {}).get("ordered") else "unordered-list"
+        base = (
+            "ordered-list"
+            if token.get("attrs", {}).get("ordered")
+            else "unordered-list"
+        )
         style_name = f"{base}-{min(level + 1, 9)}"
         for item in token.get("children", []):
             for block in item.get("children", []):
@@ -502,9 +514,7 @@ class DocxBuilder:
                     self.add_inline_nodes(paragraph, block.get("children", []))
 
     def add_code_block(self, token: dict[str, Any]) -> None:
-        self.document.add_paragraph(
-            token.get("raw", "").rstrip(), style="code-block"
-        )
+        self.document.add_paragraph(token.get("raw", "").rstrip(), style="code-block")
 
     def add_block_quote(self, token: dict[str, Any]) -> None:
         for child in token.get("children", []):
@@ -536,7 +546,9 @@ class DocxBuilder:
             elif token["type"] in handlers:
                 handlers[token["type"]](token)
             elif token["type"] == "thematic_break":
-                raise ValueError("Markdown thematic breaks are not rendered automatically")
+                raise ValueError(
+                    "Markdown thematic breaks are not rendered automatically"
+                )
 
 
 def convert_markdown(

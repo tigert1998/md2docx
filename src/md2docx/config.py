@@ -10,7 +10,6 @@ from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor
 
-
 TEXT_FIELDS = {
     "chinese-font",
     "latin-font",
@@ -151,9 +150,7 @@ def _parse_style(name: str, data: Any) -> StyleConfig:
     numbering = data["numbering"]
     if numbering is not None and not isinstance(numbering, str):
         raise ValueError(f"{name}.numbering must be a string or null")
-    hanging_indent = _optional_length(
-        data["hanging-indent"], f"{name}.hanging-indent"
-    )
+    hanging_indent = _optional_length(data["hanging-indent"], f"{name}.hanging-indent")
     first_line_indent = _optional_length(
         data["first-line-indent"], f"{name}.first-line-indent"
     )
@@ -237,13 +234,9 @@ def apply_config_to_style(word_style: Any, config: StyleConfig) -> None:
             if config.line_spacing.unit == "pt"
             else config.line_spacing.value
         )
-        fmt.left_indent = Pt(
-            config.indent_before_text.to_points(config.size_pt)
-        )
+        fmt.left_indent = Pt(config.indent_before_text.to_points(config.size_pt))
         if config.hanging_indent is not None:
-            fmt.first_line_indent = Pt(
-                -config.hanging_indent.to_points(config.size_pt)
-            )
+            fmt.first_line_indent = Pt(-config.hanging_indent.to_points(config.size_pt))
         elif config.first_line_indent is None:
             fmt.first_line_indent = None
         else:
