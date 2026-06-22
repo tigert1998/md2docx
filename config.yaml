@@ -70,7 +70,7 @@ unordered-list:
 inline-math: &inline-math
   <<: *body
   chinese-font: "Microsoft YaHei"
-  latin-font: "New Computer Modern Math"
+  latin-font: "STIXGeneral"
 math-block:
   <<: *inline-math
   space-before: "0pt"

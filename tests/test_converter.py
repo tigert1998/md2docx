@@ -5,109 +5,14 @@ import pytest
 from docx import Document
 from PIL import Image
 
-from md2docx.config import load_config
+from md2docx.config import REQUIRED_SECTIONS, load_config
 from md2docx.converter import convert_markdown, parse_frontmatter
+from md2docx.math_render import render_latex
 
 
-CONFIG = """title:
-  chinese-font: SimSun
-  latin-font: Times New Roman
-  size: 22pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 8pt
-  line-spacing: 28pt
-  numbering: null
-  first-line-indent: null
-  align: center
-h1:
-  chinese-font: SimHei
-  latin-font: Times New Roman
-  size: 16pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 0pt
-  line-spacing: 28pt
-  numbering: "一、"
-  first-line-indent: 2em
-  align: left
-h2:
-  chinese-font: KaiTi
-  latin-font: Times New Roman
-  size: 16pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 0pt
-  line-spacing: 28pt
-  numbering: "（一）"
-  first-line-indent: 2em
-  align: left
-h3:
-  chinese-font: FangSong
-  latin-font: Times New Roman
-  size: 16pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 0pt
-  line-spacing: 28pt
-  numbering: "1. "
-  first-line-indent: 2em
-  align: left
-h4:
-  chinese-font: FangSong
-  latin-font: Times New Roman
-  size: 16pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 0pt
-  line-spacing: 28pt
-  numbering: "（1）"
-  first-line-indent: 2em
-  align: left
-body:
-  chinese-font: FangSong
-  latin-font: Times New Roman
-  size: 16pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 0pt
-  line-spacing: 28pt
-  first-line-indent: 2em
-  align: left
-image:
-  space-before: 1pt
-  space-after: 2pt
-  line-spacing: 1em
-  align: center
-image-caption:
-  chinese-font: FangSong
-  latin-font: Times New Roman
-  size: 16pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 0pt
-  line-spacing: 28pt
-  numbering: "图1 "
-  first-line-indent: null
-  align: center
-math-block:
-  space-before: 3pt
-  space-after: 4pt
-  line-spacing: 1em
-  align: center
-enumerated-list:
-  chinese-font: FangSong
-  latin-font: Times New Roman
-  size: 16pt
-  color: "#000000"
-  space-before: 0pt
-  space-after: 0pt
-  line-spacing: 28pt
-  numbering: "1. "
-  indent-before-text-increment: 2em
-  first-line-indent: 2em
-  align: justify
-"""
+PROJECT_ROOT = Path(__file__).parents[1]
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+CONFIG = CONFIG_PATH.read_text(encoding="utf-8")
 
 
 def test_frontmatter_is_required() -> None:
@@ -118,45 +23,53 @@ def test_frontmatter_is_required() -> None:
     assert body.startswith("# 一级标题")
 
 
-def test_config_is_strict(tmp_path: Path) -> None:
+def test_real_config_is_the_strict_schema(tmp_path: Path) -> None:
+    styles = load_config(CONFIG_PATH)
+    assert set(styles) == REQUIRED_SECTIONS
+    assert styles["title"].first_line_indent is not None
+    assert styles["title"].first_line_indent.unit == "pt"
+    assert styles["ordered-list"].indent_before_text_increment is not None
+    assert styles["unordered-list"].indent_before_text_increment is not None
+
     config = tmp_path / "config.yaml"
-    config.write_text("body:\n  size: 12pt\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="missing required configuration section"):
+    config.write_text(CONFIG.replace("inline-code:", "missing-inline-code:", 1), encoding="utf-8")
+    with pytest.raises(
+        ValueError, match="missing required configuration section.*inline-code"
+    ):
         load_config(config)
 
-    config.write_text(CONFIG.replace('  color: "#000000"\n', "", 1), encoding="utf-8")
+    config.write_text(
+        CONFIG.replace('  color: "#000000"\n', "", 1),
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="title is missing required field.*color"):
         load_config(config)
 
 
-def test_end_to_end_uses_native_numbering_and_fields(tmp_path: Path) -> None:
+def test_end_to_end_uses_yaml_named_styles_without_direct_formatting(
+    tmp_path: Path,
+) -> None:
     Image.new("RGB", (320, 160), "steelblue").save(tmp_path / "sample.png")
-    markdown_path = tmp_path / "sample.md"
-    markdown_path.write_text(
+    markdown = tmp_path / "sample.md"
+    markdown.write_text(
         """---
 title: 测试文档
 ---
 
 # 概述
 
-正文含有 **粗体** 和行内公式 $E=mc^2$。
+正文含有 **粗体**、*斜体*、`code` 和行内公式 $E=mc^2$。
 
-## 子标题
+1. 有序一层
+   1. 有序二层
+      1. 有序三层
 
-### 三级标题
+- 无序一层
+  - 无序二层
 
-#### 四级标题
-
-1. 第一层第一项
-   1. 第二层第一项
-      1. 第三层第一项
-   2. 第二层第二项
-2. 第一层第二项
-
-分隔两个独立列表。
-
-3. 指定起始值
-4. 指定起始值的下一项
+```text
+code block
+```
 
 $$
 \\frac{a}{b} = c
@@ -170,175 +83,94 @@ $$
 """,
         encoding="utf-8",
     )
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(CONFIG, encoding="utf-8")
     output = tmp_path / "sample.docx"
-    convert_markdown(markdown_path, output, config_path)
+    convert_markdown(markdown, output, CONFIG_PATH)
 
     document = Document(output)
-    assert document.paragraphs[0].text == "测试文档"
-    assert document.paragraphs[0].style.name == "Title"
-    assert document.paragraphs[0]._p.pPr.numPr is None
-    assert list(document.paragraphs[0]._p.pPr)[0].tag.endswith("}pStyle")
-    assert len(list(document.paragraphs[0]._p.pPr)) == 1
-    assert document.paragraphs[0].runs[0]._r.rPr is None
-    assert any(p.text == "概述" and p.style.name == "Heading 1" for p in document.paragraphs)
-    assert any(p.text == "子标题" and p.style.name == "Heading 2" for p in document.paragraphs)
-    assert any(p.text == "三级标题" and p.style.name == "Heading 3" for p in document.paragraphs)
-    assert any(p.text == "四级标题" and p.style.name == "Heading 4" for p in document.paragraphs)
-    heading_paragraphs = [
-        paragraph
-        for paragraph in document.paragraphs
-        if paragraph.style.name.startswith("Heading ")
+    assert document.paragraphs[0].style.name == "title"
+    assert next(p for p in document.paragraphs if p.text == "概述").style.name == "h1"
+    assert next(p for p in document.paragraphs if p.text == "code block").style.name == "code-block"
+
+    ordered = [p for p in document.paragraphs if p.style.name.startswith("ordered-list-")]
+    unordered = [
+        p for p in document.paragraphs if p.style.name.startswith("unordered-list-")
     ]
-    assert heading_paragraphs
-    assert all(run._r.rPr is None for p in heading_paragraphs for run in p.runs)
-    for paragraph in heading_paragraphs:
-        paragraph_properties = list(paragraph._p.pPr)
-        assert len(paragraph_properties) == 1
-        assert paragraph_properties[0].tag.endswith("}pStyle")
-    for level in range(1, 5):
-        heading_format = document.styles[f"Heading {level}"].paragraph_format
-        assert round(heading_format.first_line_indent.pt) == 32
-        assert round(heading_format.line_spacing.pt) == 28
-    enumerated_paragraphs = [
-        p for p in document.paragraphs if p.style.name.startswith("List Number")
+    assert [p.style.name for p in ordered] == [
+        "ordered-list-1",
+        "ordered-list-2",
+        "ordered-list-3",
     ]
-    assert [p.text for p in enumerated_paragraphs] == [
-        "第一层第一项",
-        "第二层第一项",
-        "第三层第一项",
-        "第二层第二项",
-        "第一层第二项",
-        "指定起始值",
-        "指定起始值的下一项",
-    ]
-    assert [p.style.name for p in enumerated_paragraphs] == [
-        "List Number",
-        "List Number 2",
-        "List Number 3",
-        "List Number 2",
-        "List Number",
-        "List Number",
-        "List Number",
+    assert [p.style.name for p in unordered] == [
+        "unordered-list-1",
+        "unordered-list-2",
     ]
     assert [
-        round(document.styles[name].paragraph_format.left_indent.pt)
-        for name in ("List Number", "List Number 2", "List Number 3")
+        round(document.styles[f"ordered-list-{level}"].paragraph_format.left_indent.pt)
+        for level in range(1, 4)
     ] == [0, 32, 64]
-    assert len(document.tables) == 1
+    assert [
+        round(document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt)
+        for level in range(1, 3)
+    ] == [0, 32]
+
+    body = next(p for p in document.paragraphs if p.text.startswith("正文含有"))
+    for run in body.runs:
+        rpr = run._r.rPr
+        if rpr is None:
+            continue
+        tags = {child.tag.rsplit("}", 1)[-1] for child in rpr}
+        assert tags <= {"b", "bCs", "i", "iCs", "rStyle", "drawing"}
+    for paragraph in document.paragraphs:
+        if paragraph.text and paragraph.style.name not in {"body"}:
+            ppr = paragraph._p.pPr
+            if ppr is not None:
+                tags = {child.tag.rsplit("}", 1)[-1] for child in ppr}
+                assert tags <= {"pStyle"}
 
     with ZipFile(output) as archive:
-        document_xml = archive.read("word/document.xml").decode("utf-8")
         styles_xml = archive.read("word/styles.xml").decode("utf-8")
         numbering_xml = archive.read("word/numbering.xml").decode("utf-8")
-        media = [name for name in archive.namelist() if name.startswith("word/media/")]
+        document_xml = archive.read("word/document.xml").decode("utf-8")
 
-    assert "md2docx heading numbering" in numbering_xml
-    assert 'w:val="chineseCounting"' in numbering_xml
-    assert 'w:val="%1、"' in numbering_xml
-    assert 'w:val="（%2）"' in numbering_xml
-    assert 'w:val="%3. "' in numbering_xml
-    assert "md2docx image caption numbering" in numbering_xml
-    assert 'w:val="图%1 "' in numbering_xml
-    assert "md2docx enumerated list numbering" in numbering_xml
-    assert numbering_xml.count('w:suff w:val="nothing"') >= 14
-    assert 'w:lvlText w:val="%1. "' in numbering_xml
-    assert 'w:lvlText w:val="%2. "' in numbering_xml
-    assert 'w:lvlText w:val="%3. "' in numbering_xml
+    for name in REQUIRED_SECTIONS:
+        assert f'w:name w:val="{name}"' in styles_xml
+    for level in range(1, 10):
+        assert f'w:name w:val="ordered-list-{level}"' in styles_xml
+        assert f'w:name w:val="unordered-list-{level}"' in styles_xml
+    assert "md2docx ordered-list numbering" in numbering_xml
+    assert "md2docx unordered-list numbering" in numbering_xml
+    assert 'w:pStyle w:val="ordered-list-1"' in numbering_xml
+    assert 'w:pStyle w:val="unordered-list-1"' in numbering_xml
     assert 'w:left="0"' in numbering_xml
     assert 'w:left="640"' in numbering_xml
     assert 'w:left="1280"' in numbering_xml
-    assert 'w:pStyle w:val="ListNumber"' in numbering_xml
-    assert 'w:pStyle w:val="ListNumber2"' in numbering_xml
-    assert 'w:pStyle w:val="ListNumber3"' in numbering_xml
-    for name in (
-        "md2docx heading numbering",
-        "md2docx image caption numbering",
-        "md2docx enumerated list numbering",
-    ):
-        custom_numbering = numbering_xml.split(name, 1)[1].split(
-            "</w:abstractNum>", 1
-        )[0]
-        assert "<w:tab" not in custom_numbering
-    assert "SEQ Figure" not in document_xml
-    assert 'w:pStyle w:val="ImageCaption"' in numbering_xml
-    assert 'w:eastAsia="SimHei"' in numbering_xml
-    assert 'w:eastAsia="KaiTi"' in numbering_xml
-    assert 'w:eastAsia="FangSong"' in numbering_xml
-    assert 'w:ascii="Times New Roman"' in numbering_xml
-    assert 'w:sz w:val="32"' in numbering_xml
-    assert 'w:szCs w:val="32"' in numbering_xml
-    assert numbering_xml.count('<w:b w:val="0"/>') >= 4
-    assert numbering_xml.count('<w:bCs w:val="0"/>') >= 4
-    assert numbering_xml.count('<w:i w:val="0"/>') >= 4
-    assert numbering_xml.count('<w:iCs w:val="0"/>') >= 4
-    heading_numbering = numbering_xml.split(
-        "md2docx heading numbering", 1
-    )[1].split("</w:abstractNum>", 1)[0]
-    h4_numbering = heading_numbering.split(
-        '<w:lvl w:ilvl="3">', 1
-    )[1].split("</w:lvl>", 1)[0]
-    assert '<w:i w:val="0"/>' in h4_numbering
-    assert '<w:iCs w:val="0"/>' in h4_numbering
-    assert "MD2DOCXTitle" not in styles_xml
-    title_style = styles_xml.split(
-        '<w:style w:type="paragraph" w:styleId="Title">',
-        1,
-    )[1].split("</w:style>", 1)[0]
-    assert "<w:basedOn" not in title_style
-    assert "<w:link" not in title_style
-    assert "<w:keepNext" not in title_style
-    assert "<w:keepLines" not in title_style
-    assert "Theme=" not in title_style
-    assert "MD2DOCXEnumeratedList" not in styles_xml
-    for style_id in ("ListNumber", "ListNumber2", "ListNumber3"):
-        list_style = styles_xml.split(
-            f'<w:style w:type="paragraph" w:styleId="{style_id}">',
-            1,
-        )[1].split("</w:style>", 1)[0]
-        assert "<w:numPr>" in list_style
-    for paragraph in enumerated_paragraphs:
-        assert paragraph._p.pPr.numPr is None
-    for level in range(1, 5):
-        heading_style = styles_xml.split(
-            f'<w:style w:type="paragraph" w:styleId="Heading{level}">',
-            1,
-        )[1].split("</w:style>", 1)[0]
-        assert '<w:b w:val="0"/>' in heading_style
-        assert '<w:i w:val="0"/>' in heading_style
-        assert "<w:basedOn" not in heading_style
-        assert "<w:link" not in heading_style
-        assert "<w:keepNext" not in heading_style
-        assert "<w:keepLines" not in heading_style
-        assert "<w:outlineLvl" not in heading_style
-        assert "Theme=" not in heading_style
-    assert "w:pBdr" not in document_xml.split("测试文档", 1)[0][-500:]
-    assert 'w:color w:val="000000"' in styles_xml
-    assert 'w:before="60" w:after="80" w:line="240"' in document_xml
-    assert 'w:before="20" w:after="40" w:line="240"' in document_xml
-    assert len(media) >= 3
+    assert "<w:rFonts" not in document_xml
+    assert "<w:sz " not in document_xml
+    assert "<w:color " not in document_xml
 
 
 def test_local_image_path_supports_chinese_characters(tmp_path: Path) -> None:
     image_name = "结算包拓扑关系示意图.png"
     Image.new("RGB", (32, 16), "steelblue").save(tmp_path / image_name)
-    markdown_path = tmp_path / "中文文档.md"
-    markdown_path.write_text(
-        f"""---
-title: 中文图片路径测试
----
-
-![拓扑关系]({image_name})
-""",
+    markdown = tmp_path / "中文文档.md"
+    markdown.write_text(
+        f"---\ntitle: 中文图片路径测试\n---\n\n![拓扑关系]({image_name})\n",
         encoding="utf-8",
     )
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(CONFIG, encoding="utf-8")
     output = tmp_path / "输出文档.docx"
-
-    convert_markdown(markdown_path, output, config_path)
-
+    convert_markdown(markdown, output, CONFIG_PATH)
     with ZipFile(output) as archive:
-        media = [name for name in archive.namelist() if name.startswith("word/media/")]
-    assert media
+        assert any(name.startswith("word/media/") for name in archive.namelist())
+
+
+def test_new_computer_modern_uses_builtin_math_font_without_findfont_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    image = render_latex("E=mc^2", font_family="NewComputerModern Math")
+    assert image.read(8) == b"\x89PNG\r\n\x1a\n"
+    assert not any("findfont" in record.getMessage() for record in caplog.records)
+
+
+def test_unknown_math_font_fails_instead_of_silently_falling_back() -> None:
+    with pytest.raises(ValueError, match="configured math font.*not installed"):
+        render_latex("x", font_family="Definitely Missing Math Font")
