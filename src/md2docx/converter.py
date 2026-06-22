@@ -6,6 +6,7 @@ import re
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
+from xml.etree import ElementTree
 
 import mistune
 import yaml
@@ -15,7 +16,11 @@ from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.oxml.shape import CT_Inline
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
+from docx.opc.part import Part
 from docx.shared import Inches, Pt
+from lxml import etree
 from PIL import Image
 
 from .config import (
@@ -113,6 +118,71 @@ def _set_table_geometry(table: Any, widths: list[int]) -> None:
             tc_w = cell._tc.get_or_add_tcPr().get_or_add_tcW()
             tc_w.set(qn("w:w"), str(widths[index]))
             tc_w.set(qn("w:type"), "dxa")
+
+
+_SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+_SVG_BLIP_NAMESPACE = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+_SVG_EXTENSION_URI = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
+_RELATIONSHIP_NAMESPACE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+
+
+def _svg_length_px(value: str | None) -> float | None:
+    if value is None:
+        return None
+    match = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?|\.\d+)\s*(px|pt|pc|in|cm|mm)?\s*",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    number = float(match.group(1))
+    unit = (match.group(2) or "px").lower()
+    pixels_per_unit = {
+        "px": 1.0,
+        "pt": 96 / 72,
+        "pc": 16.0,
+        "in": 96.0,
+        "cm": 96 / 2.54,
+        "mm": 96 / 25.4,
+    }
+    return number * pixels_per_unit[unit]
+
+
+def _svg_dimensions(svg: bytes) -> tuple[float, float]:
+    try:
+        root = ElementTree.fromstring(svg)
+    except ElementTree.ParseError as exc:
+        raise ValueError(f"invalid SVG image: {exc}") from exc
+    if root.tag not in {"svg", f"{{{_SVG_NAMESPACE}}}svg"}:
+        raise ValueError("invalid SVG image: root element must be <svg>")
+
+    width = _svg_length_px(root.get("width"))
+    height = _svg_length_px(root.get("height"))
+    view_box = root.get("viewBox")
+    view_width = view_height = None
+    if view_box is not None:
+        try:
+            _, _, view_width, view_height = map(
+                float, re.split(r"[\s,]+", view_box.strip())
+            )
+        except ValueError as exc:
+            raise ValueError("invalid SVG viewBox") from exc
+        if view_width <= 0 or view_height <= 0:
+            raise ValueError("SVG viewBox dimensions must be positive")
+
+    if width is None and height is None:
+        width, height = view_width, view_height
+    elif width is None and height is not None and view_width and view_height:
+        width = height * view_width / view_height
+    elif height is None and width is not None and view_width and view_height:
+        height = width * view_height / view_width
+
+    if width is None or height is None or width <= 0 or height <= 0:
+        raise ValueError("SVG requires positive width/height or a valid viewBox")
+    return width, height
 
 
 class DocxBuilder:
@@ -299,9 +369,60 @@ class DocxBuilder:
             raise FileNotFoundError(f"image not found: {path}")
         return BytesIO(path.read_bytes())
 
+    def _insert_svg(
+        self,
+        run: Any,
+        svg: bytes,
+        filename: str,
+        *,
+        max_width: float,
+    ) -> None:
+        width_px, height_px = _svg_dimensions(svg)
+        width_in = min(width_px / 96, max_width)
+        height_in = width_in * height_px / width_px
+
+        document_part = run.part
+        package = document_part.package
+        partname = package.next_partname("/word/media/image%d.svg")
+        svg_part = Part(partname, "image/svg+xml", svg, package)
+        relationship_id = document_part.relate_to(svg_part, RT.IMAGE)
+
+        inline = CT_Inline.new_pic_inline(
+            document_part.next_id,
+            relationship_id,
+            filename or partname.filename,
+            Inches(width_in),
+            Inches(height_in),
+        )
+        blip = inline.find(".//" + qn("a:blip"))
+        if blip is None:
+            raise RuntimeError("failed to create SVG drawing")
+        extension_list = etree.SubElement(blip, qn("a:extLst"))
+        extension = etree.SubElement(extension_list, qn("a:ext"))
+        extension.set("uri", _SVG_EXTENSION_URI)
+        svg_blip = etree.SubElement(
+            extension,
+            f"{{{_SVG_BLIP_NAMESPACE}}}svgBlip",
+            nsmap={"asvg": _SVG_BLIP_NAMESPACE},
+        )
+        svg_blip.set(f"{{{_RELATIONSHIP_NAMESPACE}}}embed", relationship_id)
+        run._r.add_drawing(inline)
+
     def _insert_image(self, run: Any, token: dict[str, Any], *, block: bool = False) -> None:
-        stream = self._image_stream(token.get("attrs", {}).get("url", ""))
+        url = token.get("attrs", {}).get("url", "")
+        stream = self._image_stream(url)
         max_width = 6.5 if block else 2.0
+        image_bytes = stream.getvalue()
+        try:
+            root = ElementTree.fromstring(image_bytes)
+            is_svg = root.tag in {"svg", f"{{{_SVG_NAMESPACE}}}svg"}
+        except ElementTree.ParseError:
+            is_svg = False
+        if is_svg:
+            filename = Path(unquote(urlparse(url).path)).name or "image.svg"
+            self._insert_svg(run, image_bytes, filename, max_width=max_width)
+            return
+
         with Image.open(stream) as image:
             width_px, height_px = image.size
             dpi = image.info.get("dpi", (96, 96))[0] or 96

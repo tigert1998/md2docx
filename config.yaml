@@ -88,7 +88,7 @@ code-block:
   space-after: "0pt"
   line-spacing: "1em"
   first-line-indent: "0pt"
-  align: "center"
+  align: "left"
 table-header:
   <<: *body
   first-line-indent: "0pt"

@@ -222,6 +222,35 @@ def test_local_image_path_supports_chinese_characters(tmp_path: Path) -> None:
         assert any(name.startswith("word/media/") for name in archive.namelist())
 
 
+def test_svg_is_embedded_directly_without_raster_fallback(tmp_path: Path) -> None:
+    svg = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+<rect width="200" height="100" fill="steelblue"/>
+</svg>"""
+    (tmp_path / "diagram.svg").write_bytes(svg)
+    markdown = tmp_path / "svg.md"
+    markdown.write_text("![SVG diagram](diagram.svg)\n", encoding="utf-8")
+    output = tmp_path / "svg.docx"
+
+    convert_markdown(markdown, output, CONFIG_PATH)
+
+    with ZipFile(output) as archive:
+        media = [name for name in archive.namelist() if name.startswith("word/media/")]
+        assert media == ["word/media/image1.svg"]
+        assert archive.read(media[0]) == svg
+        content_types = archive.read("[Content_Types].xml").decode("utf-8")
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+        relationships = archive.read(
+            "word/_rels/document.xml.rels"
+        ).decode("utf-8")
+
+    assert 'ContentType="image/svg+xml"' in content_types
+    assert "svgBlip" in document_xml
+    assert "drawing/2016/SVG/main" in document_xml
+    assert 'Target="media/image1.svg"' in relationships
+    assert not any(name.endswith((".png", ".jpg", ".jpeg")) for name in media)
+    Document(output)
+
+
 def test_math_fontset_renders_without_configuring_font_family(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
