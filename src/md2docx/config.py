@@ -64,8 +64,8 @@ class StyleConfig:
     latin_font: str | None
     size_pt: float | None
     color: RGBColor | None
-    space_before_pt: float
-    space_after_pt: float
+    space_before: Length
+    space_after: Length
     line_spacing: Length
     numbering: str | None
     first_line_indent: Length | None
@@ -161,8 +161,8 @@ def _parse_style(name: str, data: Any) -> StyleConfig:
         latin_font=_optional_text(data["latin-font"], f"{name}.latin-font"),
         size_pt=_optional_points(data["size"], f"{name}.size"),
         color=_optional_color(data["color"], f"{name}.color"),
-        space_before_pt=_points(data["space-before"], f"{name}.space-before"),
-        space_after_pt=_points(data["space-after"], f"{name}.space-after"),
+        space_before=_length(data["space-before"], f"{name}.space-before"),
+        space_after=_length(data["space-after"], f"{name}.space-after"),
         line_spacing=_length(data["line-spacing"], f"{name}.line-spacing"),
         numbering=numbering,
         first_line_indent=_optional_length(
@@ -212,8 +212,8 @@ def apply_config_to_style(word_style: Any, config: StyleConfig) -> None:
 
     if word_style.type == WD_STYLE_TYPE.PARAGRAPH:
         fmt = word_style.paragraph_format
-        fmt.space_before = Pt(config.space_before_pt)
-        fmt.space_after = Pt(config.space_after_pt)
+        fmt.space_before = Pt(config.space_before.to_points(config.size_pt))
+        fmt.space_after = Pt(config.space_after.to_points(config.size_pt))
         fmt.line_spacing = (
             Pt(config.line_spacing.value)
             if config.line_spacing.unit == "pt"

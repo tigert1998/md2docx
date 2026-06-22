@@ -36,9 +36,7 @@ from .numbering import (
 def parse_frontmatter(source: str) -> tuple[dict[str, Any], str]:
     lines = source.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
-        raise ValueError(
-            "Markdown must begin with YAML Frontmatter delimited by '---'"
-        )
+        return {}, source
     end = next(
         (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
         None,
@@ -150,6 +148,8 @@ class DocxBuilder:
         section.page_height = Inches(11)
 
         for name in self.styles:
+            if name in LIST_SECTIONS:
+                continue
             style_type = (
                 WD_STYLE_TYPE.CHARACTER
                 if name in INLINE_SECTIONS
@@ -217,6 +217,7 @@ class DocxBuilder:
         *,
         bold: bool = False,
         italic: bool = False,
+        strike: bool = False,
     ) -> None:
         for node in nodes:
             kind = node["type"]
@@ -226,12 +227,15 @@ class DocxBuilder:
                     run.bold = True
                 if italic:
                     run.italic = True
+                if strike:
+                    run.font.strike = True
             elif kind in {"strong", "emphasis"}:
                 self.add_inline_nodes(
                     paragraph,
                     node.get("children", []),
                     bold=bold or kind == "strong",
                     italic=italic or kind == "emphasis",
+                    strike=strike,
                 )
             elif kind == "codespan":
                 run = paragraph.add_run(node.get("raw", ""))
@@ -255,13 +259,20 @@ class DocxBuilder:
             elif kind in {"linebreak", "softbreak"}:
                 paragraph.add_run().add_break()
             elif kind == "strikethrough":
-                paragraph.add_run(self._plain_text(node.get("children", [])))
+                self.add_inline_nodes(
+                    paragraph,
+                    node.get("children", []),
+                    bold=bold,
+                    italic=italic,
+                    strike=True,
+                )
             else:
                 self.add_inline_nodes(
                     paragraph,
                     node.get("children", []),
                     bold=bold,
                     italic=italic,
+                    strike=strike,
                 )
 
     def add_block_math(self, expression: str) -> None:
@@ -406,7 +417,8 @@ def convert_markdown(
         plugins=["table", "math", "strikethrough"],
     )
     builder = DocxBuilder(load_config(config_path), input_path.parent)
-    builder.add_title(str(metadata["title"]))
+    if "title" in metadata:
+        builder.add_title(str(metadata["title"]))
     builder.consume(markdown(markdown_source))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     builder.document.save(output_path)
