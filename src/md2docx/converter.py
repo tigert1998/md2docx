@@ -19,7 +19,7 @@ from docx.oxml.ns import qn
 from docx.oxml.shape import CT_Inline
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.opc.part import Part
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, RGBColor
 from lxml import etree
 from PIL import Image
 
@@ -28,6 +28,7 @@ from .config import (
     LIST_SECTIONS,
     StyleConfig,
     apply_config_to_style,
+    list_level_layout,
     load_config,
 )
 from .math_render import render_latex
@@ -257,25 +258,14 @@ class DocxBuilder:
         for name, ordered in (("ordered-list", True), ("unordered-list", False)):
             config = self.style(name)
             num_id = install_list_numbering(self.document, config, ordered=ordered)
-            if config.indent_before_text_increment is None:
-                raise ValueError(f"{name} requires indent-before-text-increment")
             for level in range(1, 10):
                 style_name = f"{name}-{level}"
                 word_style = self.document.styles.add_style(
                     style_name, WD_STYLE_TYPE.PARAGRAPH
                 )
                 apply_config_to_style(word_style, config)
-                hanging_indent = (
-                    0
-                    if config.hanging_indent is None
-                    else config.hanging_indent.to_points(config.size_pt)
-                )
-                word_style.paragraph_format.left_indent = Pt(
-                    config.indent_before_text.to_points(config.size_pt)
-                    + hanging_indent
-                    + config.indent_before_text_increment.to_points(config.size_pt)
-                    * (level - 1)
-                )
+                layout = list_level_layout(config, level)
+                word_style.paragraph_format.left_indent = Pt(layout.left_indent_pt)
                 set_style_numbering(word_style, num_id, level)
 
     def add_title(self, title: str) -> None:
@@ -294,95 +284,37 @@ class DocxBuilder:
         paragraph = self.document.add_paragraph(style="body")
         self.add_inline_nodes(paragraph, children)
 
-    def _add_hyperlink_runs(
-        self,
-        hyperlink: Any,
-        nodes: Iterable[dict[str, Any]],
-        *,
-        bold: bool = False,
-        italic: bool = False,
-        strike: bool = False,
-    ) -> None:
-        for node in nodes:
-            kind = node["type"]
-            if kind == "text":
-                run = OxmlElement("w:r")
-                run_properties = OxmlElement("w:rPr")
-                color = OxmlElement("w:color")
-                color.set(qn("w:val"), "0563C1")
-                underline = OxmlElement("w:u")
-                underline.set(qn("w:val"), "single")
-                run_properties.extend((color, underline))
-                if bold:
-                    run_properties.append(OxmlElement("w:b"))
-                    run_properties.append(OxmlElement("w:bCs"))
-                if italic:
-                    run_properties.append(OxmlElement("w:i"))
-                    run_properties.append(OxmlElement("w:iCs"))
-                if strike:
-                    run_properties.append(OxmlElement("w:strike"))
-                run.append(run_properties)
-                text = OxmlElement("w:t")
-                text.set(qn("xml:space"), "preserve")
-                text.text = node.get("raw", "")
-                run.append(text)
-                hyperlink.append(run)
-            elif kind in {"strong", "emphasis", "strikethrough"}:
-                self._add_hyperlink_runs(
-                    hyperlink,
-                    node.get("children", []),
-                    bold=bold or kind == "strong",
-                    italic=italic or kind == "emphasis",
-                    strike=strike or kind == "strikethrough",
-                )
-            else:
-                text = self._plain_text([node])
-                if text:
-                    self._add_hyperlink_runs(
-                        hyperlink,
-                        [{"type": "text", "raw": text}],
-                        bold=bold,
-                        italic=italic,
-                        strike=strike,
-                    )
-
-    def add_hyperlink(
+    def _add_inline_run(
         self,
         paragraph: Any,
-        node: dict[str, Any],
         *,
+        container: Any | None = None,
+        hyperlink: bool = False,
         bold: bool = False,
         italic: bool = False,
         strike: bool = False,
-    ) -> None:
-        url = node.get("attrs", {}).get("url", "")
-        relationship_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
-        hyperlink = OxmlElement("w:hyperlink")
-        hyperlink.set(qn("r:id"), relationship_id)
-        children = node.get("children", [])
-        if children:
-            self._add_hyperlink_runs(
-                hyperlink,
-                children,
-                bold=bold,
-                italic=italic,
-                strike=strike,
-            )
-        else:
-            self._add_hyperlink_runs(
-                hyperlink,
-                [{"type": "text", "raw": url}],
-                bold=bold,
-                italic=italic,
-                strike=strike,
-            )
-        paragraph._p.append(hyperlink)
+    ) -> Any:
+        run = paragraph.add_run()
+        if container is not None:
+            container.append(run._r)
+        if hyperlink:
+            run.font.color.rgb = RGBColor(0x05, 0x63, 0xC1)
+            run.font.underline = True
+        if bold:
+            run.bold = True
+        if italic:
+            run.italic = True
+        if strike:
+            run.font.strike = True
+        return run
 
     def add_inline_nodes(
         self,
         paragraph: Any,
         nodes: Iterable[dict[str, Any]],
         *,
+        container: Any | None = None,
+        hyperlink: bool = False,
         bold: bool = False,
         italic: bool = False,
         strike: bool = False,
@@ -390,23 +322,35 @@ class DocxBuilder:
         for node in nodes:
             kind = node["type"]
             if kind == "text":
-                run = paragraph.add_run(node.get("raw", ""))
-                if bold:
-                    run.bold = True
-                if italic:
-                    run.italic = True
-                if strike:
-                    run.font.strike = True
+                run = self._add_inline_run(
+                    paragraph,
+                    container=container,
+                    hyperlink=hyperlink,
+                    bold=bold,
+                    italic=italic,
+                    strike=strike,
+                )
+                run.text = node.get("raw", "")
             elif kind in {"strong", "emphasis"}:
                 self.add_inline_nodes(
                     paragraph,
                     node.get("children", []),
+                    container=container,
+                    hyperlink=hyperlink,
                     bold=bold or kind == "strong",
                     italic=italic or kind == "emphasis",
                     strike=strike,
                 )
             elif kind == "codespan":
-                run = paragraph.add_run(node.get("raw", ""))
+                run = self._add_inline_run(
+                    paragraph,
+                    container=container,
+                    hyperlink=hyperlink,
+                    bold=bold,
+                    italic=italic,
+                    strike=strike,
+                )
+                run.text = node.get("raw", "")
                 run.style = "inline-code"
             elif kind == "inline_math":
                 config = self.style("inline-math")
@@ -416,23 +360,41 @@ class DocxBuilder:
                     fontset=config.latin_font or "stix",
                     color=f"#{config.color}" if config.color is not None else "black",
                 )
-                paragraph.add_run().add_picture(image)
+                self._add_inline_run(
+                    paragraph, container=container, hyperlink=hyperlink
+                ).add_picture(image)
             elif kind == "image":
-                self._insert_image(paragraph.add_run(), node)
+                run = self._add_inline_run(
+                    paragraph, container=container, hyperlink=hyperlink
+                )
+                self._insert_image(run, node)
             elif kind == "link":
-                self.add_hyperlink(
+                url = node.get("attrs", {}).get("url", "")
+                relationship_id = paragraph.part.relate_to(
+                    url, RT.HYPERLINK, is_external=True
+                )
+                hyperlink_element = OxmlElement("w:hyperlink")
+                hyperlink_element.set(qn("r:id"), relationship_id)
+                paragraph._p.append(hyperlink_element)
+                self.add_inline_nodes(
                     paragraph,
-                    node,
+                    node.get("children", []) or [{"type": "text", "raw": url}],
+                    container=hyperlink_element,
+                    hyperlink=True,
                     bold=bold,
                     italic=italic,
                     strike=strike,
                 )
             elif kind in {"linebreak", "softbreak"}:
-                paragraph.add_run().add_break()
+                self._add_inline_run(
+                    paragraph, container=container, hyperlink=hyperlink
+                ).add_break()
             elif kind == "strikethrough":
                 self.add_inline_nodes(
                     paragraph,
                     node.get("children", []),
+                    container=container,
+                    hyperlink=hyperlink,
                     bold=bold,
                     italic=italic,
                     strike=True,
@@ -441,6 +403,8 @@ class DocxBuilder:
                 self.add_inline_nodes(
                     paragraph,
                     node.get("children", []),
+                    container=container,
+                    hyperlink=hyperlink,
                     bold=bold,
                     italic=italic,
                     strike=strike,

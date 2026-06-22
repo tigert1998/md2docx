@@ -78,6 +78,32 @@ class StyleConfig:
     indent_before_text_increment: Length | None = None
 
 
+@dataclass(frozen=True)
+class ListLevelLayout:
+    left_indent_pt: float
+    hanging_indent_pt: float | None
+
+
+def list_level_layout(style: StyleConfig, level: int) -> ListLevelLayout:
+    if level < 1:
+        raise ValueError("list level must be at least 1")
+    if style.indent_before_text_increment is None:
+        raise ValueError(f"{style.name} requires indent-before-text-increment")
+    hanging_indent_pt = (
+        None
+        if style.hanging_indent is None
+        else style.hanging_indent.to_points(style.size_pt)
+    )
+    return ListLevelLayout(
+        left_indent_pt=(
+            style.indent_before_text.to_points(style.size_pt)
+            + (hanging_indent_pt or 0)
+            + style.indent_before_text_increment.to_points(style.size_pt) * (level - 1)
+        ),
+        hanging_indent_pt=hanging_indent_pt,
+    )
+
+
 def _require_fields(section: str, data: dict[str, Any], required: set[str]) -> None:
     missing = sorted(required - data.keys())
     if missing:

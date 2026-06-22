@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -7,7 +8,13 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from PIL import Image
 
-from md2docx.config import REQUIRED_SECTIONS, apply_config_to_style, load_config
+from md2docx.config import (
+    REQUIRED_SECTIONS,
+    Length,
+    apply_config_to_style,
+    list_level_layout,
+    load_config,
+)
 from md2docx.converter import convert_markdown, parse_frontmatter
 from md2docx.math_render import render_latex
 
@@ -84,10 +91,6 @@ title: 测试文档
 
 正文含有 **粗体**、*斜体*、~~删除线~~、`code` 和行内公式 $E=mc^2$。
 
-访问 [**OpenAI**](https://openai.com)。
-
----
-
 1. 有序一层
    1. 有序二层
       1. 有序三层
@@ -138,22 +141,22 @@ $$
         "unordered-list-2",
     ]
     list_config = load_config(CONFIG_PATH)["ordered-list"]
-    list_base = list_config.indent_before_text.to_points(
-        list_config.size_pt
-    ) + list_config.hanging_indent.to_points(list_config.size_pt)
-    list_increment = list_config.indent_before_text_increment.to_points(
-        list_config.size_pt
-    )
     assert [
         round(document.styles[f"ordered-list-{level}"].paragraph_format.left_indent.pt)
         for level in range(1, 4)
-    ] == [round(list_base + list_increment * level) for level in range(3)]
+    ] == [
+        round(list_level_layout(list_config, level).left_indent_pt)
+        for level in range(1, 4)
+    ]
     assert [
         round(
             document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt
         )
         for level in range(1, 3)
-    ] == [round(list_base + list_increment * level) for level in range(2)]
+    ] == [
+        round(list_level_layout(list_config, level).left_indent_pt)
+        for level in range(1, 3)
+    ]
     assert [
         round(
             document.styles[
@@ -191,25 +194,6 @@ $$
         tags = {child.tag.rsplit("}", 1)[-1] for child in rpr}
         assert tags <= {"b", "bCs", "i", "iCs", "strike", "rStyle", "drawing"}
 
-    link_paragraph = next(p for p in document.paragraphs if p.text == "访问 OpenAI。")
-    hyperlink = link_paragraph._p.find(qn("w:hyperlink"))
-    assert hyperlink is not None
-    hyperlink_run_properties = hyperlink.find(qn("w:r") + "/" + qn("w:rPr"))
-    assert hyperlink_run_properties is not None
-    assert hyperlink_run_properties.find(qn("w:color")).get(qn("w:val")) == "0563C1"
-    assert hyperlink_run_properties.find(qn("w:u")).get(qn("w:val")) == "single"
-    assert hyperlink_run_properties.find(qn("w:b")) is not None
-
-    horizontal_rule = next(
-        paragraph
-        for paragraph in document.paragraphs
-        if paragraph._p.find(qn("w:pPr") + "/" + qn("w:pBdr")) is not None
-    )
-    bottom_border = horizontal_rule._p.find(
-        qn("w:pPr") + "/" + qn("w:pBdr") + "/" + qn("w:bottom")
-    )
-    assert bottom_border is not None
-    assert bottom_border.get(qn("w:val")) == "single"
     for paragraph in document.paragraphs:
         if paragraph.text and paragraph.style.name not in {"body"}:
             ppr = paragraph._p.pPr
@@ -221,9 +205,6 @@ $$
         styles_xml = archive.read("word/styles.xml").decode("utf-8")
         numbering_xml = archive.read("word/numbering.xml").decode("utf-8")
         document_xml = archive.read("word/document.xml").decode("utf-8")
-        document_relationships = archive.read("word/_rels/document.xml.rels").decode(
-            "utf-8"
-        )
 
     for name in REQUIRED_SECTIONS - {"ordered-list", "unordered-list"}:
         assert f'w:name w:val="{name}"' in styles_xml
@@ -236,21 +217,89 @@ $$
     assert "md2docx unordered-list numbering" in numbering_xml
     assert 'w:pStyle w:val="ordered-list-1"' in numbering_xml
     assert 'w:pStyle w:val="unordered-list-1"' in numbering_xml
-    for level in range(3):
-        left_twips = round((list_base + list_increment * level) * 20)
-        assert f'w:left="{left_twips}"' in numbering_xml
-    hanging_twips = round(
-        list_config.hanging_indent.to_points(list_config.size_pt) * 20
-    )
-    assert f'w:hanging="{hanging_twips}"' in numbering_xml
+    for level in range(1, 4):
+        layout = list_level_layout(list_config, level)
+        assert f'w:left="{round(layout.left_indent_pt * 20)}"' in numbering_xml
+        assert (
+            f'w:hanging="{round(layout.hanging_indent_pt * 20)}"'
+            in numbering_xml
+        )
     assert "<w:rFonts" not in document_xml
     assert "<w:sz " not in document_xml
-    assert document_xml.count('<w:color w:val="0563C1"') == 1
+    assert "<w:color " not in document_xml
     assert "<w:strike" in document_xml
-    assert "<w:hyperlink" in document_xml
-    assert "<w:pBdr>" in document_xml
-    assert 'Target="https://openai.com"' in document_relationships
-    assert 'TargetMode="External"' in document_relationships
+
+
+def test_inline_renderer_preserves_formatting_inside_hyperlinks(
+    tmp_path: Path,
+) -> None:
+    markdown = tmp_path / "link.md"
+    markdown.write_text(
+        "访问 [**粗体**、`代码`、~~删除~~](https://example.com)。\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "link.docx"
+
+    convert_markdown(markdown, output, CONFIG_PATH)
+
+    document = Document(output)
+    paragraph = document.paragraphs[0]
+    assert paragraph.text == "访问 粗体、代码、删除。"
+    hyperlink = paragraph._p.find(qn("w:hyperlink"))
+    assert hyperlink is not None
+    runs = hyperlink.findall(qn("w:r"))
+    assert "".join(run.find(qn("w:t")).text for run in runs) == "粗体、代码、删除"
+    for run in runs:
+        properties = run.find(qn("w:rPr"))
+        assert properties.find(qn("w:color")).get(qn("w:val")) == "0563C1"
+        assert properties.find(qn("w:u")).get(qn("w:val")) == "single"
+    assert runs[0].find(qn("w:rPr") + "/" + qn("w:b")) is not None
+    assert runs[2].find(qn("w:rPr") + "/" + qn("w:rStyle")) is not None
+    assert runs[4].find(qn("w:rPr") + "/" + qn("w:strike")) is not None
+
+    with ZipFile(output) as archive:
+        relationships = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert 'Target="https://example.com"' in relationships
+    assert 'TargetMode="External"' in relationships
+
+
+def test_thematic_break_uses_native_paragraph_border(tmp_path: Path) -> None:
+    markdown = tmp_path / "rule.md"
+    markdown.write_text("上文\n\n---\n\n下文\n", encoding="utf-8")
+    output = tmp_path / "rule.docx"
+
+    convert_markdown(markdown, output, CONFIG_PATH)
+
+    document = Document(output)
+    horizontal_rule = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph._p.find(qn("w:pPr") + "/" + qn("w:pBdr")) is not None
+    )
+    bottom_border = horizontal_rule._p.find(
+        qn("w:pPr") + "/" + qn("w:pBdr") + "/" + qn("w:bottom")
+    )
+    assert bottom_border is not None
+    assert bottom_border.get(qn("w:val")) == "single"
+
+
+def test_list_level_layout_is_the_single_indent_calculation() -> None:
+    config = replace(
+        load_config(CONFIG_PATH)["ordered-list"],
+        indent_before_text=Length(10, "pt"),
+        hanging_indent=Length(5, "pt"),
+        indent_before_text_increment=Length(3, "pt"),
+    )
+
+    assert [
+        list_level_layout(config, level).left_indent_pt for level in range(1, 4)
+    ] == [15, 18, 21]
+    assert [
+        list_level_layout(config, level).hanging_indent_pt
+        for level in range(1, 4)
+    ] == [5, 5, 5]
+    with pytest.raises(ValueError, match="at least 1"):
+        list_level_layout(config, 0)
 
 
 def test_markdown_without_frontmatter_has_no_title_paragraph(tmp_path: Path) -> None:

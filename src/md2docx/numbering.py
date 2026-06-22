@@ -6,7 +6,7 @@ from typing import Any
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from .config import StyleConfig
+from .config import StyleConfig, list_level_layout
 
 
 def _numbering_level(pattern: str, level: int) -> tuple[str, str]:
@@ -157,28 +157,17 @@ def install_list_numbering(document: Any, style: StyleConfig, *, ordered: bool) 
     numbering, abstract, abstract_id = _new_abstract(
         document, f"md2docx {style.name} numbering", "multilevel"
     )
-    if style.indent_before_text_increment is None:
-        raise ValueError(f"{style.name} requires indent-before-text-increment")
     for level in range(9):
         if ordered:
             fmt, text = _numbering_level(style.numbering, level)
         else:
             fmt, text = "bullet", style.numbering
-        hanging_points = (
-            0
-            if style.hanging_indent is None
-            else style.hanging_indent.to_points(style.size_pt)
-        )
-        left_twips = round(
-            (
-                style.indent_before_text.to_points(style.size_pt)
-                + hanging_points
-                + style.indent_before_text_increment.to_points(style.size_pt) * level
-            )
-            * 20
-        )
+        layout = list_level_layout(style, level + 1)
+        left_twips = round(layout.left_indent_pt * 20)
         hanging_twips = (
-            None if style.hanging_indent is None else round(hanging_points * 20)
+            None
+            if layout.hanging_indent_pt is None
+            else round(layout.hanging_indent_pt * 20)
         )
         _append_level(
             abstract,
