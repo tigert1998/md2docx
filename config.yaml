@@ -89,3 +89,11 @@ code-block:
   line-spacing: "1em"
   first-line-indent: "0pt"
   align: "center"
+table-header:
+  <<: *body
+  first-line-indent: "0pt"
+  align: "center"
+table-body:
+  <<: *body
+  first-line-indent: "0pt"
+  align: "left"

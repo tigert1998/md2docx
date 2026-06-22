@@ -39,6 +39,8 @@ REQUIRED_SECTIONS = {
     "math-block",
     "inline-code",
     "code-block",
+    "table-header",
+    "table-body",
 }
 LIST_SECTIONS = {"ordered-list", "unordered-list"}
 INLINE_SECTIONS = {"inline-math", "inline-code"}

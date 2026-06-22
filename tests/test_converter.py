@@ -3,6 +3,7 @@ from zipfile import ZipFile
 
 import pytest
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PIL import Image
 
 from md2docx.config import REQUIRED_SECTIONS, apply_config_to_style, load_config
@@ -84,9 +85,9 @@ $$
 
 ![示例图片](sample.png)
 
-| 名称 | 数值 |
-| --- | ---: |
-| 甲 | 10 |
+| 左对齐 | 居中 | 右对齐 |
+| :--- | :---: | ---: |
+| 文本 | 文本 | 文本 |
 """,
         encoding="utf-8",
     )
@@ -119,6 +120,24 @@ $$
         round(document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt)
         for level in range(1, 3)
     ] == [0, 32]
+
+    table = document.tables[0]
+    assert [cell.paragraphs[0].style.name for cell in table.rows[0].cells] == [
+        "table-header",
+        "table-header",
+        "table-header",
+    ]
+    assert [cell.paragraphs[0].style.name for cell in table.rows[1].cells] == [
+        "table-body",
+        "table-body",
+        "table-body",
+    ]
+    for row in table.rows:
+        assert [cell.paragraphs[0].alignment for cell in row.cells] == [
+            WD_ALIGN_PARAGRAPH.LEFT,
+            WD_ALIGN_PARAGRAPH.CENTER,
+            WD_ALIGN_PARAGRAPH.RIGHT,
+        ]
 
     body = next(p for p in document.paragraphs if p.text.startswith("正文含有"))
     deleted = next(run for run in body.runs if run.text == "删除线")

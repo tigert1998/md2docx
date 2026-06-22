@@ -12,6 +12,7 @@ import yaml
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
@@ -339,13 +340,21 @@ class DocxBuilder:
         table.autofit = False
         widths = [9360 // column_count] * column_count
         widths[-1] += 9360 - sum(widths)
+        alignments = {
+            "left": WD_ALIGN_PARAGRAPH.LEFT,
+            "center": WD_ALIGN_PARAGRAPH.CENTER,
+            "right": WD_ALIGN_PARAGRAPH.RIGHT,
+        }
         for row_index, row in enumerate(rows):
             for column_index, cell_token in enumerate(row):
                 cell = table.cell(row_index, column_index)
                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                 _set_cell_margins(cell)
                 paragraph = cell.paragraphs[0]
-                paragraph.style = "body"
+                paragraph.style = "table-header" if row_index == 0 else "table-body"
+                alignment = cell_token.get("attrs", {}).get("align")
+                if alignment is not None:
+                    paragraph.alignment = alignments[alignment]
                 self.add_inline_nodes(paragraph, cell_token.get("children", []))
                 if row_index == 0:
                     _shade_cell(cell, "E7E6E6")
