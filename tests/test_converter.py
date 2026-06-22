@@ -4,6 +4,7 @@ from zipfile import ZipFile
 import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 from PIL import Image
 
 from md2docx.config import REQUIRED_SECTIONS, apply_config_to_style, load_config
@@ -83,6 +84,10 @@ title: 测试文档
 
 正文含有 **粗体**、*斜体*、~~删除线~~、`code` 和行内公式 $E=mc^2$。
 
+访问 [**OpenAI**](https://openai.com)。
+
+---
+
 1. 有序一层
    1. 有序二层
       1. 有序三层
@@ -132,16 +137,23 @@ $$
         "unordered-list-1",
         "unordered-list-2",
     ]
+    list_config = load_config(CONFIG_PATH)["ordered-list"]
+    list_base = list_config.indent_before_text.to_points(
+        list_config.size_pt
+    ) + list_config.hanging_indent.to_points(list_config.size_pt)
+    list_increment = list_config.indent_before_text_increment.to_points(
+        list_config.size_pt
+    )
     assert [
         round(document.styles[f"ordered-list-{level}"].paragraph_format.left_indent.pt)
         for level in range(1, 4)
-    ] == [32, 64, 96]
+    ] == [round(list_base + list_increment * level) for level in range(3)]
     assert [
         round(
             document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt
         )
         for level in range(1, 3)
-    ] == [32, 64]
+    ] == [round(list_base + list_increment * level) for level in range(2)]
     assert [
         round(
             document.styles[
@@ -178,6 +190,26 @@ $$
             continue
         tags = {child.tag.rsplit("}", 1)[-1] for child in rpr}
         assert tags <= {"b", "bCs", "i", "iCs", "strike", "rStyle", "drawing"}
+
+    link_paragraph = next(p for p in document.paragraphs if p.text == "访问 OpenAI。")
+    hyperlink = link_paragraph._p.find(qn("w:hyperlink"))
+    assert hyperlink is not None
+    hyperlink_run_properties = hyperlink.find(qn("w:r") + "/" + qn("w:rPr"))
+    assert hyperlink_run_properties is not None
+    assert hyperlink_run_properties.find(qn("w:color")).get(qn("w:val")) == "0563C1"
+    assert hyperlink_run_properties.find(qn("w:u")).get(qn("w:val")) == "single"
+    assert hyperlink_run_properties.find(qn("w:b")) is not None
+
+    horizontal_rule = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph._p.find(qn("w:pPr") + "/" + qn("w:pBdr")) is not None
+    )
+    bottom_border = horizontal_rule._p.find(
+        qn("w:pPr") + "/" + qn("w:pBdr") + "/" + qn("w:bottom")
+    )
+    assert bottom_border is not None
+    assert bottom_border.get(qn("w:val")) == "single"
     for paragraph in document.paragraphs:
         if paragraph.text and paragraph.style.name not in {"body"}:
             ppr = paragraph._p.pPr
@@ -189,6 +221,9 @@ $$
         styles_xml = archive.read("word/styles.xml").decode("utf-8")
         numbering_xml = archive.read("word/numbering.xml").decode("utf-8")
         document_xml = archive.read("word/document.xml").decode("utf-8")
+        document_relationships = archive.read("word/_rels/document.xml.rels").decode(
+            "utf-8"
+        )
 
     for name in REQUIRED_SECTIONS - {"ordered-list", "unordered-list"}:
         assert f'w:name w:val="{name}"' in styles_xml
@@ -201,14 +236,21 @@ $$
     assert "md2docx unordered-list numbering" in numbering_xml
     assert 'w:pStyle w:val="ordered-list-1"' in numbering_xml
     assert 'w:pStyle w:val="unordered-list-1"' in numbering_xml
-    assert 'w:left="640"' in numbering_xml
-    assert 'w:left="1280"' in numbering_xml
-    assert 'w:left="1920"' in numbering_xml
-    assert 'w:hanging="640"' in numbering_xml
+    for level in range(3):
+        left_twips = round((list_base + list_increment * level) * 20)
+        assert f'w:left="{left_twips}"' in numbering_xml
+    hanging_twips = round(
+        list_config.hanging_indent.to_points(list_config.size_pt) * 20
+    )
+    assert f'w:hanging="{hanging_twips}"' in numbering_xml
     assert "<w:rFonts" not in document_xml
     assert "<w:sz " not in document_xml
-    assert "<w:color " not in document_xml
+    assert document_xml.count('<w:color w:val="0563C1"') == 1
     assert "<w:strike" in document_xml
+    assert "<w:hyperlink" in document_xml
+    assert "<w:pBdr>" in document_xml
+    assert 'Target="https://openai.com"' in document_relationships
+    assert 'TargetMode="External"' in document_relationships
 
 
 def test_markdown_without_frontmatter_has_no_title_paragraph(tmp_path: Path) -> None:

@@ -294,6 +294,90 @@ class DocxBuilder:
         paragraph = self.document.add_paragraph(style="body")
         self.add_inline_nodes(paragraph, children)
 
+    def _add_hyperlink_runs(
+        self,
+        hyperlink: Any,
+        nodes: Iterable[dict[str, Any]],
+        *,
+        bold: bool = False,
+        italic: bool = False,
+        strike: bool = False,
+    ) -> None:
+        for node in nodes:
+            kind = node["type"]
+            if kind == "text":
+                run = OxmlElement("w:r")
+                run_properties = OxmlElement("w:rPr")
+                color = OxmlElement("w:color")
+                color.set(qn("w:val"), "0563C1")
+                underline = OxmlElement("w:u")
+                underline.set(qn("w:val"), "single")
+                run_properties.extend((color, underline))
+                if bold:
+                    run_properties.append(OxmlElement("w:b"))
+                    run_properties.append(OxmlElement("w:bCs"))
+                if italic:
+                    run_properties.append(OxmlElement("w:i"))
+                    run_properties.append(OxmlElement("w:iCs"))
+                if strike:
+                    run_properties.append(OxmlElement("w:strike"))
+                run.append(run_properties)
+                text = OxmlElement("w:t")
+                text.set(qn("xml:space"), "preserve")
+                text.text = node.get("raw", "")
+                run.append(text)
+                hyperlink.append(run)
+            elif kind in {"strong", "emphasis", "strikethrough"}:
+                self._add_hyperlink_runs(
+                    hyperlink,
+                    node.get("children", []),
+                    bold=bold or kind == "strong",
+                    italic=italic or kind == "emphasis",
+                    strike=strike or kind == "strikethrough",
+                )
+            else:
+                text = self._plain_text([node])
+                if text:
+                    self._add_hyperlink_runs(
+                        hyperlink,
+                        [{"type": "text", "raw": text}],
+                        bold=bold,
+                        italic=italic,
+                        strike=strike,
+                    )
+
+    def add_hyperlink(
+        self,
+        paragraph: Any,
+        node: dict[str, Any],
+        *,
+        bold: bool = False,
+        italic: bool = False,
+        strike: bool = False,
+    ) -> None:
+        url = node.get("attrs", {}).get("url", "")
+        relationship_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), relationship_id)
+        children = node.get("children", [])
+        if children:
+            self._add_hyperlink_runs(
+                hyperlink,
+                children,
+                bold=bold,
+                italic=italic,
+                strike=strike,
+            )
+        else:
+            self._add_hyperlink_runs(
+                hyperlink,
+                [{"type": "text", "raw": url}],
+                bold=bold,
+                italic=italic,
+                strike=strike,
+            )
+        paragraph._p.append(hyperlink)
+
     def add_inline_nodes(
         self,
         paragraph: Any,
@@ -336,9 +420,12 @@ class DocxBuilder:
             elif kind == "image":
                 self._insert_image(paragraph.add_run(), node)
             elif kind == "link":
-                paragraph.add_run(
-                    self._plain_text(node.get("children", []))
-                    or node.get("attrs", {}).get("url", "")
+                self.add_hyperlink(
+                    paragraph,
+                    node,
+                    bold=bold,
+                    italic=italic,
+                    strike=strike,
                 )
             elif kind in {"linebreak", "softbreak"}:
                 paragraph.add_run().add_break()
@@ -522,6 +609,18 @@ class DocxBuilder:
                 paragraph = self.document.add_paragraph(style="body")
                 self.add_inline_nodes(paragraph, child.get("children", []))
 
+    def add_thematic_break(self) -> None:
+        paragraph = self.document.add_paragraph(style="body")
+        paragraph_properties = paragraph._p.get_or_add_pPr()
+        borders = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "6")
+        bottom.set(qn("w:space"), "1")
+        bottom.set(qn("w:color"), "auto")
+        borders.append(bottom)
+        paragraph_properties.append(borders)
+
     @staticmethod
     def _plain_text(nodes: Iterable[dict[str, Any]]) -> str:
         result = []
@@ -539,16 +638,13 @@ class DocxBuilder:
             "list": self.add_list,
             "block_code": self.add_code_block,
             "block_quote": self.add_block_quote,
+            "thematic_break": lambda token: self.add_thematic_break(),
         }
         for token in tokens:
             if token["type"] == "paragraph":
                 self.add_paragraph(token.get("children", []))
             elif token["type"] in handlers:
                 handlers[token["type"]](token)
-            elif token["type"] == "thematic_break":
-                raise ValueError(
-                    "Markdown thematic breaks are not rendered automatically"
-                )
 
 
 def convert_markdown(
