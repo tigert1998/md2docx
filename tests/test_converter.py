@@ -1,15 +1,22 @@
+from dataclasses import replace
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 from PIL import Image
 
-from md2docx.config import REQUIRED_SECTIONS, apply_config_to_style, load_config
+from md2docx.config import (
+    REQUIRED_SECTIONS,
+    Length,
+    apply_config_to_style,
+    list_level_layout,
+    load_config,
+)
 from md2docx.converter import convert_markdown, parse_frontmatter
 from md2docx.math_render import render_latex
-
 
 PROJECT_ROOT = Path(__file__).parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
@@ -43,7 +50,9 @@ def test_real_config_is_the_strict_schema(tmp_path: Path) -> None:
     assert styles["ordered-list"].hanging_indent is not None
 
     config = tmp_path / "config.yaml"
-    config.write_text(CONFIG.replace("inline-code:", "missing-inline-code:", 1), encoding="utf-8")
+    config.write_text(
+        CONFIG.replace("inline-code:", "missing-inline-code:", 1), encoding="utf-8"
+    )
     with pytest.raises(
         ValueError, match="missing required configuration section.*inline-code"
     ):
@@ -111,9 +120,14 @@ $$
     document = Document(output)
     assert document.paragraphs[0].style.name == "title"
     assert next(p for p in document.paragraphs if p.text == "概述").style.name == "h1"
-    assert next(p for p in document.paragraphs if p.text == "code block").style.name == "code-block"
+    assert (
+        next(p for p in document.paragraphs if p.text == "code block").style.name
+        == "code-block"
+    )
 
-    ordered = [p for p in document.paragraphs if p.style.name.startswith("ordered-list-")]
+    ordered = [
+        p for p in document.paragraphs if p.style.name.startswith("ordered-list-")
+    ]
     unordered = [
         p for p in document.paragraphs if p.style.name.startswith("unordered-list-")
     ]
@@ -126,14 +140,23 @@ $$
         "unordered-list-1",
         "unordered-list-2",
     ]
+    list_config = load_config(CONFIG_PATH)["ordered-list"]
     assert [
         round(document.styles[f"ordered-list-{level}"].paragraph_format.left_indent.pt)
         for level in range(1, 4)
-    ] == [32, 64, 96]
+    ] == [
+        round(list_level_layout(list_config, level).left_indent_pt)
+        for level in range(1, 4)
+    ]
     assert [
-        round(document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt)
+        round(
+            document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt
+        )
         for level in range(1, 3)
-    ] == [32, 64]
+    ] == [
+        round(list_level_layout(list_config, level).left_indent_pt)
+        for level in range(1, 3)
+    ]
     assert [
         round(
             document.styles[
@@ -170,6 +193,7 @@ $$
             continue
         tags = {child.tag.rsplit("}", 1)[-1] for child in rpr}
         assert tags <= {"b", "bCs", "i", "iCs", "strike", "rStyle", "drawing"}
+
     for paragraph in document.paragraphs:
         if paragraph.text and paragraph.style.name not in {"body"}:
             ppr = paragraph._p.pPr
@@ -193,14 +217,89 @@ $$
     assert "md2docx unordered-list numbering" in numbering_xml
     assert 'w:pStyle w:val="ordered-list-1"' in numbering_xml
     assert 'w:pStyle w:val="unordered-list-1"' in numbering_xml
-    assert 'w:left="640"' in numbering_xml
-    assert 'w:left="1280"' in numbering_xml
-    assert 'w:left="1920"' in numbering_xml
-    assert 'w:hanging="640"' in numbering_xml
+    for level in range(1, 4):
+        layout = list_level_layout(list_config, level)
+        assert f'w:left="{round(layout.left_indent_pt * 20)}"' in numbering_xml
+        assert (
+            f'w:hanging="{round(layout.hanging_indent_pt * 20)}"'
+            in numbering_xml
+        )
     assert "<w:rFonts" not in document_xml
     assert "<w:sz " not in document_xml
     assert "<w:color " not in document_xml
     assert "<w:strike" in document_xml
+
+
+def test_inline_renderer_preserves_formatting_inside_hyperlinks(
+    tmp_path: Path,
+) -> None:
+    markdown = tmp_path / "link.md"
+    markdown.write_text(
+        "访问 [**粗体**、`代码`、~~删除~~](https://example.com)。\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "link.docx"
+
+    convert_markdown(markdown, output, CONFIG_PATH)
+
+    document = Document(output)
+    paragraph = document.paragraphs[0]
+    assert paragraph.text == "访问 粗体、代码、删除。"
+    hyperlink = paragraph._p.find(qn("w:hyperlink"))
+    assert hyperlink is not None
+    runs = hyperlink.findall(qn("w:r"))
+    assert "".join(run.find(qn("w:t")).text for run in runs) == "粗体、代码、删除"
+    for run in runs:
+        properties = run.find(qn("w:rPr"))
+        assert properties.find(qn("w:color")).get(qn("w:val")) == "0563C1"
+        assert properties.find(qn("w:u")).get(qn("w:val")) == "single"
+    assert runs[0].find(qn("w:rPr") + "/" + qn("w:b")) is not None
+    assert runs[2].find(qn("w:rPr") + "/" + qn("w:rStyle")) is not None
+    assert runs[4].find(qn("w:rPr") + "/" + qn("w:strike")) is not None
+
+    with ZipFile(output) as archive:
+        relationships = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert 'Target="https://example.com"' in relationships
+    assert 'TargetMode="External"' in relationships
+
+
+def test_thematic_break_uses_native_paragraph_border(tmp_path: Path) -> None:
+    markdown = tmp_path / "rule.md"
+    markdown.write_text("上文\n\n---\n\n下文\n", encoding="utf-8")
+    output = tmp_path / "rule.docx"
+
+    convert_markdown(markdown, output, CONFIG_PATH)
+
+    document = Document(output)
+    horizontal_rule = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph._p.find(qn("w:pPr") + "/" + qn("w:pBdr")) is not None
+    )
+    bottom_border = horizontal_rule._p.find(
+        qn("w:pPr") + "/" + qn("w:pBdr") + "/" + qn("w:bottom")
+    )
+    assert bottom_border is not None
+    assert bottom_border.get(qn("w:val")) == "single"
+
+
+def test_list_level_layout_is_the_single_indent_calculation() -> None:
+    config = replace(
+        load_config(CONFIG_PATH)["ordered-list"],
+        indent_before_text=Length(10, "pt"),
+        hanging_indent=Length(5, "pt"),
+        indent_before_text_increment=Length(3, "pt"),
+    )
+
+    assert [
+        list_level_layout(config, level).left_indent_pt for level in range(1, 4)
+    ] == [15, 18, 21]
+    assert [
+        list_level_layout(config, level).hanging_indent_pt
+        for level in range(1, 4)
+    ] == [5, 5, 5]
+    with pytest.raises(ValueError, match="at least 1"):
+        list_level_layout(config, 0)
 
 
 def test_markdown_without_frontmatter_has_no_title_paragraph(tmp_path: Path) -> None:
@@ -211,15 +310,19 @@ def test_markdown_without_frontmatter_has_no_title_paragraph(tmp_path: Path) -> 
     convert_markdown(markdown, output, CONFIG_PATH)
 
     document = Document(output)
-    assert [paragraph.text for paragraph in document.paragraphs] == ["正文标题", "正文。"]
+    assert [paragraph.text for paragraph in document.paragraphs] == [
+        "正文标题",
+        "正文。",
+    ]
     assert all(paragraph.style.name != "title" for paragraph in document.paragraphs)
 
 
 def test_space_before_and_after_support_em_lengths(tmp_path: Path) -> None:
     config = tmp_path / "config.yaml"
     config.write_text(
-        CONFIG.replace('  space-before: "28pt"', '  space-before: "1em"', 1)
-        .replace('  space-after: "28pt"', '  space-after: "0.5em"', 1),
+        CONFIG.replace('  space-before: "28pt"', '  space-before: "1em"', 1).replace(
+            '  space-after: "28pt"', '  space-after: "0.5em"', 1
+        ),
         encoding="utf-8",
     )
 
@@ -262,9 +365,7 @@ def test_svg_is_embedded_directly_without_raster_fallback(tmp_path: Path) -> Non
         assert archive.read(media[0]) == svg
         content_types = archive.read("[Content_Types].xml").decode("utf-8")
         document_xml = archive.read("word/document.xml").decode("utf-8")
-        relationships = archive.read(
-            "word/_rels/document.xml.rels"
-        ).decode("utf-8")
+        relationships = archive.read("word/_rels/document.xml.rels").decode("utf-8")
 
     assert 'ContentType="image/svg+xml"' in content_types
     assert "svgBlip" in document_xml

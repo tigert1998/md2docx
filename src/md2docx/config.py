@@ -10,7 +10,6 @@ from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor
 
-
 TEXT_FIELDS = {
     "chinese-font",
     "latin-font",
@@ -77,6 +76,32 @@ class StyleConfig:
     indent_before_text: Length
     align: WD_ALIGN_PARAGRAPH
     indent_before_text_increment: Length | None = None
+
+
+@dataclass(frozen=True)
+class ListLevelLayout:
+    left_indent_pt: float
+    hanging_indent_pt: float | None
+
+
+def list_level_layout(style: StyleConfig, level: int) -> ListLevelLayout:
+    if level < 1:
+        raise ValueError("list level must be at least 1")
+    if style.indent_before_text_increment is None:
+        raise ValueError(f"{style.name} requires indent-before-text-increment")
+    hanging_indent_pt = (
+        None
+        if style.hanging_indent is None
+        else style.hanging_indent.to_points(style.size_pt)
+    )
+    return ListLevelLayout(
+        left_indent_pt=(
+            style.indent_before_text.to_points(style.size_pt)
+            + (hanging_indent_pt or 0)
+            + style.indent_before_text_increment.to_points(style.size_pt) * (level - 1)
+        ),
+        hanging_indent_pt=hanging_indent_pt,
+    )
 
 
 def _require_fields(section: str, data: dict[str, Any], required: set[str]) -> None:
@@ -151,9 +176,7 @@ def _parse_style(name: str, data: Any) -> StyleConfig:
     numbering = data["numbering"]
     if numbering is not None and not isinstance(numbering, str):
         raise ValueError(f"{name}.numbering must be a string or null")
-    hanging_indent = _optional_length(
-        data["hanging-indent"], f"{name}.hanging-indent"
-    )
+    hanging_indent = _optional_length(data["hanging-indent"], f"{name}.hanging-indent")
     first_line_indent = _optional_length(
         data["first-line-indent"], f"{name}.first-line-indent"
     )
@@ -237,13 +260,9 @@ def apply_config_to_style(word_style: Any, config: StyleConfig) -> None:
             if config.line_spacing.unit == "pt"
             else config.line_spacing.value
         )
-        fmt.left_indent = Pt(
-            config.indent_before_text.to_points(config.size_pt)
-        )
+        fmt.left_indent = Pt(config.indent_before_text.to_points(config.size_pt))
         if config.hanging_indent is not None:
-            fmt.first_line_indent = Pt(
-                -config.hanging_indent.to_points(config.size_pt)
-            )
+            fmt.first_line_indent = Pt(-config.hanging_indent.to_points(config.size_pt))
         elif config.first_line_indent is None:
             fmt.first_line_indent = None
         else:
