@@ -18,17 +18,17 @@ from docx.shared import Inches, Pt
 from PIL import Image
 
 from .config import (
-    BlockStyle,
-    EnumeratedListStyle,
-    TextStyle,
-    apply_style_to_paragraph,
+    INLINE_SECTIONS,
+    LIST_SECTIONS,
+    StyleConfig,
+    apply_config_to_style,
     load_config,
 )
 from .math_render import render_latex
 from .numbering import (
     install_caption_numbering,
-    install_enumerated_list_numbering,
     install_heading_numbering,
+    install_list_numbering,
     set_style_numbering,
 )
 
@@ -57,27 +57,11 @@ def parse_frontmatter(source: str) -> tuple[dict[str, Any], str]:
     return metadata, "".join(lines[end + 1 :])
 
 
-def _set_run_style(run: Any, style: TextStyle) -> None:
-    run.font.name = style.latin_font
-    run.font.size = Pt(style.size_pt)
-    run.font.color.rgb = style.color
-    rpr = run._element.get_or_add_rPr()
-    rfonts = rpr.rFonts
-    if rfonts is None:
-        rfonts = OxmlElement("w:rFonts")
-        rpr.insert(0, rfonts)
-    rfonts.set(qn("w:ascii"), style.latin_font)
-    rfonts.set(qn("w:hAnsi"), style.latin_font)
-    rfonts.set(qn("w:eastAsia"), style.chinese_font)
-    rfonts.set(qn("w:cs"), style.latin_font)
-
-
-def _reset_word_style_formatting(style: Any) -> None:
-    element = style.element
+def _reset_style(style: Any) -> None:
     for tag in ("w:basedOn", "w:link", "w:pPr", "w:rPr"):
-        child = element.find(qn(tag))
+        child = style.element.find(qn(tag))
         if child is not None:
-            element.remove(child)
+            style.element.remove(child)
 
 
 def _shade_cell(cell: Any, fill: str) -> None:
@@ -118,7 +102,6 @@ def _set_table_geometry(table: Any, widths: list[int]) -> None:
         layout = OxmlElement("w:tblLayout")
         tbl_pr.append(layout)
     layout.set(qn("w:type"), "fixed")
-
     grid = table._tbl.tblGrid
     for child in list(grid):
         grid.remove(child)
@@ -134,35 +117,28 @@ def _set_table_geometry(table: Any, widths: list[int]) -> None:
 
 
 class DocxBuilder:
-    def __init__(
-        self,
-        styles: dict[str, BlockStyle | TextStyle | EnumeratedListStyle],
-        source_dir: Path,
-    ):
+    def __init__(self, styles: dict[str, StyleConfig], source_dir: Path):
         self.styles = styles
         self.source_dir = source_dir
         self.document = Document()
         self._configure_document()
 
-    def text_style(self, name: str) -> TextStyle:
-        style = self.styles.get(name)
-        if not isinstance(style, TextStyle):
-            raise ValueError(f"configuration section {name} is not a text style")
-        return style
+    def style(self, name: str) -> StyleConfig:
+        try:
+            return self.styles[name]
+        except KeyError as exc:
+            raise ValueError(f"missing required configuration section: {name}") from exc
 
-    def block_style(self, name: str) -> BlockStyle:
-        style = self.styles.get(name)
-        if style is None:
-            raise ValueError(f"missing required configuration section: {name}")
-        return style
-
-    def enumerated_list_style(self) -> EnumeratedListStyle:
-        style = self.styles.get("enumerated-list")
-        if not isinstance(style, EnumeratedListStyle):
-            raise ValueError(
-                "configuration section enumerated-list is not an enumerated-list style"
-            )
-        return style
+    def _ensure_style(self, name: str, style_type: WD_STYLE_TYPE) -> Any:
+        if name in self.document.styles:
+            word_style = self.document.styles[name]
+            if word_style.type != style_type:
+                raise ValueError(f"Word style {name} has the wrong style type")
+        else:
+            word_style = self.document.styles.add_style(name, style_type)
+        _reset_style(word_style)
+        apply_config_to_style(word_style, self.style(name))
+        return word_style
 
     def _configure_document(self) -> None:
         section = self.document.sections[0]
@@ -172,128 +148,75 @@ class DocxBuilder:
         section.right_margin = Inches(1)
         section.page_width = Inches(8.5)
         section.page_height = Inches(11)
-        title_style = self.document.styles["Title"]
-        _reset_word_style_formatting(title_style)
-        self._configure_word_style(title_style, self.text_style("title"))
-        title_style.font.bold = False
-        title_style.font.italic = False
 
-        self._configure_word_style(
-            self.document.styles["Normal"], self.text_style("body")
-        )
-        heading_styles = sorted(
+        for name in self.styles:
+            style_type = (
+                WD_STYLE_TYPE.CHARACTER
+                if name in INLINE_SECTIONS
+                else WD_STYLE_TYPE.PARAGRAPH
+            )
+            self._ensure_style(name, style_type)
+
+        headings = sorted(
             (
-                (int(name[1:]), style)
-                for name, style in self.styles.items()
-                if re.fullmatch(r"h[1-9]", name) and isinstance(style, TextStyle)
+                (int(name[1:]), config)
+                for name, config in self.styles.items()
+                if re.fullmatch(r"h[1-9]", name)
             ),
             key=lambda item: item[0],
         )
-        num_id = install_heading_numbering(self.document, heading_styles)
-        for level, config_style in heading_styles:
-            word_style = self.document.styles[f"Heading {level}"]
-            _reset_word_style_formatting(word_style)
-            self._configure_word_style(word_style, config_style)
-            word_style.font.bold = False
-            word_style.font.italic = False
-            set_style_numbering(
-                word_style, num_id, level, config_style.numbering is not None
-            )
-        if "Image Caption" not in self.document.styles:
-            self.document.styles.add_style(
-                "Image Caption", WD_STYLE_TYPE.PARAGRAPH
-            )
-        self._configure_word_style(
-            self.document.styles["Image Caption"],
-            self.text_style("image-caption"),
-        )
-        caption_num_id = install_caption_numbering(
-            self.document, self.text_style("image-caption")
-        )
+        heading_num_id = install_heading_numbering(self.document, headings)
+        for level, config in headings:
+            if config.numbering is not None:
+                set_style_numbering(self.document.styles[config.name], heading_num_id, level)
+
+        caption = self.style("image-caption")
         set_style_numbering(
-            self.document.styles["Image Caption"], caption_num_id, 1, True
+            self.document.styles[caption.name],
+            install_caption_numbering(self.document, caption),
+            1,
         )
-        enumerated_style = self.enumerated_list_style()
-        enumerated_num_id = install_enumerated_list_numbering(
-            self.document, enumerated_style
-        )
-        for level in range(9):
-            style_name = self._list_number_style_name(level)
-            if style_name not in self.document.styles:
-                list_style = self.document.styles.add_style(
+
+        for name, ordered in (("ordered-list", True), ("unordered-list", False)):
+            config = self.style(name)
+            num_id = install_list_numbering(self.document, config, ordered=ordered)
+            if config.indent_before_text_increment is None:
+                raise ValueError(f"{name} requires indent-before-text-increment")
+            for level in range(1, 10):
+                style_name = f"{name}-{level}"
+                word_style = self.document.styles.add_style(
                     style_name, WD_STYLE_TYPE.PARAGRAPH
                 )
-                list_style.base_style = self.document.styles["List Number"]
-            else:
-                list_style = self.document.styles[style_name]
-            self._configure_word_style(list_style, enumerated_style)
-            list_style.font.bold = False
-            list_style.font.italic = False
-            list_style.paragraph_format.left_indent = Pt(
-                enumerated_style.size_pt
-                * enumerated_style.indent_before_text_increment_em
-                * level
-            )
-            set_style_numbering(
-                list_style, enumerated_num_id, level + 1, True
-            )
-
-    @staticmethod
-    def _configure_word_style(word_style: Any, config: TextStyle) -> None:
-        word_style.font.name = config.latin_font
-        word_style.font.size = Pt(config.size_pt)
-        word_style.font.color.rgb = config.color
-        rpr = word_style.element.get_or_add_rPr()
-        rfonts = rpr.rFonts
-        if rfonts is None:
-            rfonts = OxmlElement("w:rFonts")
-            rpr.insert(0, rfonts)
-        rfonts.set(qn("w:ascii"), config.latin_font)
-        rfonts.set(qn("w:hAnsi"), config.latin_font)
-        rfonts.set(qn("w:eastAsia"), config.chinese_font)
-        rfonts.set(qn("w:cs"), config.latin_font)
-        apply_style_to_paragraph(word_style, config)
-
-    @staticmethod
-    def _list_number_style_name(level: int) -> str:
-        return "List Number" if level == 0 else f"List Number {level + 1}"
+                apply_config_to_style(word_style, config)
+                word_style.paragraph_format.left_indent = Pt(
+                    config.indent_before_text_increment.to_points(config.size_pt)
+                    * (level - 1)
+                )
+                set_style_numbering(word_style, num_id, level)
 
     def add_title(self, title: str) -> None:
-        paragraph = self.document.add_paragraph(style="Title")
-        paragraph.add_run(title.strip())
+        self.document.add_paragraph(title.strip(), style="title")
 
     def add_heading(self, token: dict[str, Any]) -> None:
-        level = int(token["attrs"]["level"])
-        key = f"h{level}"
-        if key not in self.styles:
-            raise ValueError(
-                f"Markdown heading level {level} requires configuration section {key}"
-            )
-        style = self.text_style(key)
-        paragraph = self.document.add_paragraph(style=f"Heading {level}")
-        self.add_inline_nodes(
-            paragraph, token.get("children", []), style, inherit_text_style=True
-        )
+        name = f"h{int(token['attrs']['level'])}"
+        paragraph = self.document.add_paragraph(style=name)
+        self.add_inline_nodes(paragraph, token.get("children", []))
 
     def add_paragraph(self, children: Iterable[dict[str, Any]]) -> None:
         children = list(children)
         if len(children) == 1 and children[0]["type"] == "image":
             self.add_figure(children[0])
             return
-        style = self.text_style("body")
-        paragraph = self.document.add_paragraph(style="Normal")
-        apply_style_to_paragraph(paragraph, style)
-        self.add_inline_nodes(paragraph, children, style)
+        paragraph = self.document.add_paragraph(style="body")
+        self.add_inline_nodes(paragraph, children)
 
     def add_inline_nodes(
         self,
         paragraph: Any,
         nodes: Iterable[dict[str, Any]],
-        style: TextStyle,
         *,
         bold: bool = False,
         italic: bool = False,
-        inherit_text_style: bool = False,
     ) -> None:
         for node in nodes:
             kind = node["type"]
@@ -303,58 +226,52 @@ class DocxBuilder:
                     run.bold = True
                 if italic:
                     run.italic = True
-                if not inherit_text_style:
-                    _set_run_style(run, style)
             elif kind in {"strong", "emphasis"}:
                 self.add_inline_nodes(
                     paragraph,
                     node.get("children", []),
-                    style,
                     bold=bold or kind == "strong",
                     italic=italic or kind == "emphasis",
-                    inherit_text_style=inherit_text_style,
                 )
             elif kind == "codespan":
                 run = paragraph.add_run(node.get("raw", ""))
-                if not inherit_text_style:
-                    _set_run_style(run, style)
-                run.font.name = "Consolas"
-                run.font.size = Pt(max(style.size_pt - 1, 8))
+                run.style = "inline-code"
             elif kind == "inline_math":
-                image = render_latex(node.get("raw", ""), font_size=style.size_pt)
+                config = self.style("inline-math")
+                image = render_latex(
+                    node.get("raw", ""),
+                    font_size=config.size_pt or 16,
+                    font_family=config.latin_font or "STIXGeneral",
+                    color=f"#{config.color}" if config.color is not None else "black",
+                )
                 paragraph.add_run().add_picture(image)
             elif kind == "image":
                 self._insert_image(paragraph.add_run(), node)
             elif kind == "link":
-                text = self._plain_text(node.get("children", []))
-                url = node.get("attrs", {}).get("url", "")
-                run = paragraph.add_run(text or url)
-                if not inherit_text_style:
-                    _set_run_style(run, style)
-                run.underline = True
+                paragraph.add_run(
+                    self._plain_text(node.get("children", []))
+                    or node.get("attrs", {}).get("url", "")
+                )
             elif kind in {"linebreak", "softbreak"}:
                 paragraph.add_run().add_break()
             elif kind == "strikethrough":
-                run = paragraph.add_run(self._plain_text(node.get("children", [])))
-                if not inherit_text_style:
-                    _set_run_style(run, style)
-                run.font.strike = True
+                paragraph.add_run(self._plain_text(node.get("children", [])))
             else:
                 self.add_inline_nodes(
                     paragraph,
                     node.get("children", []),
-                    style,
                     bold=bold,
                     italic=italic,
-                    inherit_text_style=inherit_text_style,
                 )
 
     def add_block_math(self, expression: str) -> None:
-        block = self.block_style("math-block")
-        paragraph = self.document.add_paragraph()
-        apply_style_to_paragraph(paragraph, block)
+        config = self.style("math-block")
+        paragraph = self.document.add_paragraph(style="math-block")
         image = render_latex(
-            expression, font_size=self.text_style("body").size_pt + 2
+            expression,
+            font_size=config.size_pt or 16,
+            font_family=config.latin_font or "STIXGeneral",
+            color=f"#{config.color}" if config.color is not None else "black",
         )
         paragraph.add_run().add_picture(image)
 
@@ -371,8 +288,7 @@ class DocxBuilder:
         return BytesIO(path.read_bytes())
 
     def _insert_image(self, run: Any, token: dict[str, Any], *, block: bool = False) -> None:
-        url = token.get("attrs", {}).get("url", "")
-        stream = self._image_stream(url)
+        stream = self._image_stream(token.get("attrs", {}).get("url", ""))
         max_width = 6.5 if block else 2.0
         with Image.open(stream) as image:
             width_px, height_px = image.size
@@ -383,18 +299,11 @@ class DocxBuilder:
         run.add_picture(stream, width=Inches(width_in), height=Inches(height_in))
 
     def add_figure(self, token: dict[str, Any]) -> None:
-        paragraph = self.document.add_paragraph()
-        apply_style_to_paragraph(paragraph, self.block_style("image"))
-        paragraph.paragraph_format.keep_with_next = True
+        paragraph = self.document.add_paragraph(style="image")
         self._insert_image(paragraph.add_run(), token, block=True)
-
         caption = self._plain_text(token.get("children", []))
         if caption:
-            style = self.text_style("image-caption")
-            p = self.document.add_paragraph(style="Image Caption")
-            apply_style_to_paragraph(p, style)
-            run = p.add_run(caption)
-            _set_run_style(run, style)
+            self.document.add_paragraph(caption, style="image-caption")
 
     def add_table(self, token: dict[str, Any]) -> None:
         rows: list[list[dict[str, Any]]] = []
@@ -419,17 +328,14 @@ class DocxBuilder:
         table.autofit = False
         widths = [9360 // column_count] * column_count
         widths[-1] += 9360 - sum(widths)
-        style = self.text_style("body")
         for row_index, row in enumerate(rows):
             for column_index, cell_token in enumerate(row):
                 cell = table.cell(row_index, column_index)
                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                 _set_cell_margins(cell)
                 paragraph = cell.paragraphs[0]
-                apply_style_to_paragraph(paragraph, style)
-                paragraph.paragraph_format.first_line_indent = None
-                paragraph.paragraph_format.space_after = Pt(2)
-                self.add_inline_nodes(paragraph, cell_token.get("children", []), style)
+                paragraph.style = "body"
+                self.add_inline_nodes(paragraph, cell_token.get("children", []))
                 if row_index == 0:
                     _shade_cell(cell, "E7E6E6")
                     for run in paragraph.runs:
@@ -437,51 +343,26 @@ class DocxBuilder:
         _set_table_geometry(table, widths)
 
     def add_list(self, token: dict[str, Any], level: int = 0) -> None:
-        ordered = bool(token.get("attrs", {}).get("ordered"))
+        base = "ordered-list" if token.get("attrs", {}).get("ordered") else "unordered-list"
+        style_name = f"{base}-{min(level + 1, 9)}"
         for item in token.get("children", []):
             for block in item.get("children", []):
                 if block["type"] == "list":
                     self.add_list(block, level + 1)
-                    continue
-                if ordered:
-                    style = self.enumerated_list_style()
-                    paragraph = self.document.add_paragraph(
-                        style=self._list_number_style_name(min(level, 8))
-                    )
                 else:
-                    style_base = "List Bullet"
-                    style_name = (
-                        style_base
-                        if level == 0
-                        else f"{style_base} {min(level + 1, 3)}"
-                    )
                     paragraph = self.document.add_paragraph(style=style_name)
-                    style = self.text_style("body")
-                if not ordered:
-                    apply_style_to_paragraph(paragraph, style)
-                    paragraph.paragraph_format.first_line_indent = None
-                self.add_inline_nodes(paragraph, block.get("children", []), style)
+                    self.add_inline_nodes(paragraph, block.get("children", []))
 
     def add_code_block(self, token: dict[str, Any]) -> None:
-        paragraph = self.document.add_paragraph()
-        paragraph.paragraph_format.left_indent = Inches(0.3)
-        paragraph.paragraph_format.right_indent = Inches(0.3)
-        paragraph.paragraph_format.space_before = Pt(6)
-        paragraph.paragraph_format.space_after = Pt(6)
-        run = paragraph.add_run(token.get("raw", "").rstrip())
-        run.font.name = "Consolas"
-        run.font.size = Pt(10)
-        run.font.color.rgb = self.text_style("body").color
+        self.document.add_paragraph(
+            token.get("raw", "").rstrip(), style="code-block"
+        )
 
     def add_block_quote(self, token: dict[str, Any]) -> None:
-        style = self.text_style("body")
         for child in token.get("children", []):
             if child["type"] in {"paragraph", "block_text"}:
-                paragraph = self.document.add_paragraph()
-                apply_style_to_paragraph(paragraph, style)
-                paragraph.paragraph_format.left_indent = Inches(0.35)
-                paragraph.paragraph_format.first_line_indent = None
-                self.add_inline_nodes(paragraph, child.get("children", []), style)
+                paragraph = self.document.add_paragraph(style="body")
+                self.add_inline_nodes(paragraph, child.get("children", []))
 
     @staticmethod
     def _plain_text(nodes: Iterable[dict[str, Any]]) -> str:
@@ -493,26 +374,21 @@ class DocxBuilder:
         return "".join(result)
 
     def consume(self, tokens: Iterable[dict[str, Any]]) -> None:
+        handlers = {
+            "heading": self.add_heading,
+            "block_math": lambda token: self.add_block_math(token.get("raw", "")),
+            "table": self.add_table,
+            "list": self.add_list,
+            "block_code": self.add_code_block,
+            "block_quote": self.add_block_quote,
+        }
         for token in tokens:
-            kind = token["type"]
-            if kind == "heading":
-                self.add_heading(token)
-            elif kind == "paragraph":
+            if token["type"] == "paragraph":
                 self.add_paragraph(token.get("children", []))
-            elif kind == "block_math":
-                self.add_block_math(token.get("raw", ""))
-            elif kind == "table":
-                self.add_table(token)
-            elif kind == "list":
-                self.add_list(token)
-            elif kind == "block_code":
-                self.add_code_block(token)
-            elif kind == "block_quote":
-                self.add_block_quote(token)
-            elif kind == "thematic_break":
-                raise ValueError(
-                    "Markdown thematic breaks are not rendered automatically"
-                )
+            elif token["type"] in handlers:
+                handlers[token["type"]](token)
+            elif token["type"] == "thematic_break":
+                raise ValueError("Markdown thematic breaks are not rendered automatically")
 
 
 def convert_markdown(
@@ -529,10 +405,9 @@ def convert_markdown(
         renderer="ast",
         plugins=["table", "math", "strikethrough"],
     )
-    tokens = markdown(markdown_source)
     builder = DocxBuilder(load_config(config_path), input_path.parent)
     builder.add_title(str(metadata["title"]))
-    builder.consume(tokens)
+    builder.consume(markdown(markdown_source))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     builder.document.save(output_path)
     return output_path

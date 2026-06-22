@@ -67,5 +67,7 @@ $$
 - `color` 使用六位十六进制颜色，例如 `#000000`
 - 标题 `numbering` 可使用示例模板，也可使用 `{n}` 和 `{cn}` 占位符；生成结果是可继续编辑的 Word 原生编号
 - 图片图注编号使用绑定到 `Image Caption` 样式的 Word 原生单级编号，可在 Word 中继续插入并自动递增
-- 有序列表使用 `enumerated-list` 配置修改 Word 的 `List Number`、`List Number 2`、`List Number 3` 等层级样式；第 N 层的左缩进为 `(N - 1) × indent-before-text-increment`
+- YAML 每个顶级键都会创建同名 Word 样式；`inline-code`、`inline-math` 为字符样式，其余为段落样式
+- 有序、无序列表分别使用 `ordered-list`、`unordered-list`，并实例化为 `ordered-list-1`、`ordered-list-2`、`unordered-list-1` 等层级样式；第 N 层的左缩进为 `(N - 1) × indent-before-text-increment`
+- 生成正文时只引用命名样式，不直接覆写字体、字号、颜色、缩进或段距；粗体和斜体是仅有的直接格式例外
 - 所有原生编号均不会自动添加空格或制表符；编号与正文的间距完全由 `numbering` 字段中的手动空格控制

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 import yaml
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor
 
@@ -18,14 +19,11 @@ TEXT_FIELDS = {
     "space-before",
     "space-after",
     "line-spacing",
+    "numbering",
     "first-line-indent",
     "align",
 }
-NUMBERED_TEXT_FIELDS = TEXT_FIELDS | {"numbering"}
-ENUMERATED_LIST_FIELDS = NUMBERED_TEXT_FIELDS | {
-    "indent-before-text-increment"
-}
-BLOCK_FIELDS = {"space-before", "space-after", "line-spacing", "align"}
+LIST_FIELDS = TEXT_FIELDS | {"indent-before-text-increment"}
 REQUIRED_SECTIONS = {
     "title",
     "h1",
@@ -35,47 +33,44 @@ REQUIRED_SECTIONS = {
     "body",
     "image",
     "image-caption",
+    "ordered-list",
+    "unordered-list",
+    "inline-math",
     "math-block",
-    "enumerated-list",
+    "inline-code",
+    "code-block",
 }
+LIST_SECTIONS = {"ordered-list", "unordered-list"}
+INLINE_SECTIONS = {"inline-math", "inline-code"}
 
 
 @dataclass(frozen=True)
-class LineSpacing:
+class Length:
     value: float
     unit: str
 
+    def to_points(self, font_size_pt: float | None = None) -> float:
+        if self.unit == "pt":
+            return self.value
+        if font_size_pt is None:
+            raise ValueError("em length requires a configured font size")
+        return self.value * font_size_pt
+
 
 @dataclass(frozen=True)
-class BlockStyle:
+class StyleConfig:
+    name: str
+    chinese_font: str | None
+    latin_font: str | None
+    size_pt: float | None
+    color: RGBColor | None
     space_before_pt: float
     space_after_pt: float
-    line_spacing: LineSpacing
-    align: WD_ALIGN_PARAGRAPH
-
-
-@dataclass(frozen=True)
-class TextStyle(BlockStyle):
-    chinese_font: str
-    latin_font: str
-    size_pt: float
-    color: RGBColor
+    line_spacing: Length
     numbering: str | None
-    first_line_indent_em: float | None
-
-
-@dataclass(frozen=True)
-class EnumeratedListStyle(TextStyle):
-    indent_before_text_increment_em: float
-
-
-def _require_mapping(data: dict[str, Any], section: str) -> dict[str, Any]:
-    if section not in data:
-        raise ValueError(f"missing required configuration section: {section}")
-    value = data[section]
-    if not isinstance(value, dict):
-        raise ValueError(f"{section} must be a mapping")
-    return value
+    first_line_indent: Length | None
+    align: WD_ALIGN_PARAGRAPH
+    indent_before_text_increment: Length | None = None
 
 
 def _require_fields(section: str, data: dict[str, Any], required: set[str]) -> None:
@@ -86,27 +81,38 @@ def _require_fields(section: str, data: dict[str, Any], required: set[str]) -> N
         )
 
 
-def _points(value: Any, field: str) -> float:
-    match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)pt\s*", str(value))
+def _length(value: Any, field: str, units: str = "pt|em") -> Length:
+    match = re.fullmatch(
+        rf"\s*(-?\d+(?:\.\d+)?)({units})\s*",
+        str(value),
+    )
     if not match:
-        raise ValueError(f"{field} must use pt units, got {value!r}")
-    return float(match.group(1))
+        raise ValueError(f"{field} must use {units.replace('|', ' or ')} units")
+    return Length(float(match.group(1)), match.group(2))
 
 
-def _line_spacing(value: Any, field: str) -> LineSpacing:
-    match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)(pt|em)\s*", str(value))
-    if not match:
-        raise ValueError(f"{field} must use pt or em units, got {value!r}")
-    return LineSpacing(float(match.group(1)), match.group(2))
-
-
-def _indent_em(value: Any, field: str) -> float | None:
+def _optional_length(value: Any, field: str) -> Length | None:
     if value is None:
         return None
-    match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)em\s*", str(value))
-    if not match:
-        raise ValueError(f"{field} must use em units or null, got {value!r}")
-    return float(match.group(1))
+    return _length(value, field)
+
+
+def _points(value: Any, field: str) -> float:
+    return _length(value, field, "pt").value
+
+
+def _optional_text(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a non-empty string or null")
+    return value
+
+
+def _optional_points(value: Any, field: str) -> float | None:
+    if value is None:
+        return None
+    return _points(value, field)
 
 
 def _alignment(value: Any, field: str) -> WD_ALIGN_PARAGRAPH:
@@ -122,118 +128,101 @@ def _alignment(value: Any, field: str) -> WD_ALIGN_PARAGRAPH:
         raise ValueError(f"{field} must be one of {', '.join(choices)}") from exc
 
 
-def _color(value: Any, field: str) -> RGBColor:
+def _optional_color(value: Any, field: str) -> RGBColor | None:
+    if value is None:
+        return None
     match = re.fullmatch(r"#?([0-9A-Fa-f]{6})", str(value))
     if not match:
-        raise ValueError(f"{field} must be a six-digit hex color, got {value!r}")
+        raise ValueError(f"{field} must be a six-digit hex color or null")
     return RGBColor.from_string(match.group(1).upper())
 
 
-def _block_style(section: str, data: dict[str, Any]) -> BlockStyle:
-    _require_fields(section, data, BLOCK_FIELDS)
-    return BlockStyle(
-        space_before_pt=_points(data["space-before"], f"{section}.space-before"),
-        space_after_pt=_points(data["space-after"], f"{section}.space-after"),
-        line_spacing=_line_spacing(data["line-spacing"], f"{section}.line-spacing"),
-        align=_alignment(data["align"], f"{section}.align"),
-    )
-
-
-def _text_style(section: str, data: dict[str, Any], *, numbered: bool) -> TextStyle:
-    _require_fields(
-        section, data, NUMBERED_TEXT_FIELDS if numbered else TEXT_FIELDS
-    )
-    block = _block_style(section, data)
-    numbering = data["numbering"] if numbered else None
+def _parse_style(name: str, data: Any) -> StyleConfig:
+    if not isinstance(data, dict):
+        raise ValueError(f"{name} must be a mapping")
+    required = LIST_FIELDS if name in LIST_SECTIONS else TEXT_FIELDS
+    _require_fields(name, data, required)
+    numbering = data["numbering"]
     if numbering is not None and not isinstance(numbering, str):
-        raise ValueError(f"{section}.numbering must be a string or null")
-    return TextStyle(
-        **block.__dict__,
-        chinese_font=str(data["chinese-font"]),
-        latin_font=str(data["latin-font"]),
-        size_pt=_points(data["size"], f"{section}.size"),
-        color=_color(data["color"], f"{section}.color"),
-        numbering=numbering,
-        first_line_indent_em=_indent_em(
-            data["first-line-indent"], f"{section}.first-line-indent"
-        ),
-    )
-
-
-def _enumerated_list_style(
-    section: str, data: dict[str, Any]
-) -> EnumeratedListStyle:
-    _require_fields(section, data, ENUMERATED_LIST_FIELDS)
-    base = _text_style(section, data, numbered=True)
-    increment = _indent_em(
-        data["indent-before-text-increment"],
-        f"{section}.indent-before-text-increment",
-    )
-    if increment is None or increment < 0:
-        raise ValueError(
-            f"{section}.indent-before-text-increment must be a non-negative em value"
+        raise ValueError(f"{name}.numbering must be a string or null")
+    increment = None
+    if name in LIST_SECTIONS:
+        increment = _length(
+            data["indent-before-text-increment"],
+            f"{name}.indent-before-text-increment",
         )
-    return EnumeratedListStyle(
-        **base.__dict__,
-        indent_before_text_increment_em=increment,
+        if increment.value < 0:
+            raise ValueError(
+                f"{name}.indent-before-text-increment must be non-negative"
+            )
+    return StyleConfig(
+        name=name,
+        chinese_font=_optional_text(data["chinese-font"], f"{name}.chinese-font"),
+        latin_font=_optional_text(data["latin-font"], f"{name}.latin-font"),
+        size_pt=_optional_points(data["size"], f"{name}.size"),
+        color=_optional_color(data["color"], f"{name}.color"),
+        space_before_pt=_points(data["space-before"], f"{name}.space-before"),
+        space_after_pt=_points(data["space-after"], f"{name}.space-after"),
+        line_spacing=_length(data["line-spacing"], f"{name}.line-spacing"),
+        numbering=numbering,
+        first_line_indent=_optional_length(
+            data["first-line-indent"], f"{name}.first-line-indent"
+        ),
+        align=_alignment(data["align"], f"{name}.align"),
+        indent_before_text_increment=increment,
     )
 
 
-def load_config(
-    path: str | Path,
-) -> dict[str, BlockStyle | TextStyle | EnumeratedListStyle]:
-    path = Path(path)
-    with path.open("r", encoding="utf-8") as stream:
+def load_config(path: str | Path) -> dict[str, StyleConfig]:
+    with Path(path).open("r", encoding="utf-8") as stream:
         loaded = yaml.safe_load(stream)
     if not isinstance(loaded, dict):
         raise ValueError("configuration root must be a mapping")
-
-    missing_sections = sorted(REQUIRED_SECTIONS - loaded.keys())
-    if missing_sections:
+    missing = sorted(REQUIRED_SECTIONS - loaded.keys())
+    if missing:
         raise ValueError(
-            "missing required configuration section(s): "
-            + ", ".join(missing_sections)
+            "missing required configuration section(s): " + ", ".join(missing)
         )
-
-    result: dict[str, BlockStyle | TextStyle] = {
-        "title": _text_style("title", _require_mapping(loaded, "title"), numbered=True),
-        "body": _text_style("body", _require_mapping(loaded, "body"), numbered=False),
-        "image": _block_style("image", _require_mapping(loaded, "image")),
-        "image-caption": _text_style(
-            "image-caption",
-            _require_mapping(loaded, "image-caption"),
-            numbered=True,
-        ),
-        "math-block": _block_style(
-            "math-block", _require_mapping(loaded, "math-block")
-        ),
-        "enumerated-list": _enumerated_list_style(
-            "enumerated-list", _require_mapping(loaded, "enumerated-list")
-        ),
-    }
-    heading_names = sorted(
-        (name for name in loaded if re.fullmatch(r"h[1-9]", str(name))),
-        key=lambda name: int(name[1:]),
-    )
-    for name in heading_names:
-        result[name] = _text_style(
-            name, _require_mapping(loaded, name), numbered=True
-        )
-    return result
+    return {str(name): _parse_style(str(name), value) for name, value in loaded.items()}
 
 
-def apply_style_to_paragraph(paragraph: Any, style: BlockStyle) -> None:
-    fmt = paragraph.paragraph_format
-    fmt.space_before = Pt(style.space_before_pt)
-    fmt.space_after = Pt(style.space_after_pt)
-    if style.line_spacing.unit == "pt":
-        fmt.line_spacing = Pt(style.line_spacing.value)
-    else:
-        fmt.line_spacing = style.line_spacing.value
-    if isinstance(style, TextStyle):
-        fmt.first_line_indent = (
-            Pt(style.size_pt * style.first_line_indent_em)
-            if style.first_line_indent_em is not None
-            else None
+def apply_config_to_style(word_style: Any, config: StyleConfig) -> None:
+    if config.latin_font is not None:
+        word_style.font.name = config.latin_font
+    if config.size_pt is not None:
+        word_style.font.size = Pt(config.size_pt)
+    if config.color is not None:
+        word_style.font.color.rgb = config.color
+    if config.chinese_font is not None or config.latin_font is not None:
+        rpr = word_style.element.get_or_add_rPr()
+        rfonts = rpr.rFonts
+        if rfonts is None:
+            from docx.oxml import OxmlElement
+            from docx.oxml.ns import qn
+
+            rfonts = OxmlElement("w:rFonts")
+            rpr.insert(0, rfonts)
+        from docx.oxml.ns import qn
+
+        if config.latin_font is not None:
+            for attr in ("w:ascii", "w:hAnsi", "w:cs"):
+                rfonts.set(qn(attr), config.latin_font)
+        if config.chinese_font is not None:
+            rfonts.set(qn("w:eastAsia"), config.chinese_font)
+
+    if word_style.type == WD_STYLE_TYPE.PARAGRAPH:
+        fmt = word_style.paragraph_format
+        fmt.space_before = Pt(config.space_before_pt)
+        fmt.space_after = Pt(config.space_after_pt)
+        fmt.line_spacing = (
+            Pt(config.line_spacing.value)
+            if config.line_spacing.unit == "pt"
+            else config.line_spacing.value
         )
-    fmt.alignment = style.align
+        if config.first_line_indent is None:
+            fmt.first_line_indent = None
+        else:
+            fmt.first_line_indent = Pt(
+                config.first_line_indent.to_points(config.size_pt)
+            )
+        fmt.alignment = config.align

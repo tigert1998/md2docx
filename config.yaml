@@ -7,9 +7,9 @@ title:
   space-after: "28pt"
   line-spacing: "28pt"
   numbering: null
-  first-line-indent: null
+  first-line-indent: "0pt"
   align: "center"
-h1:
+h1: &h1
   chinese-font: "FZHei-B01"
   latin-font: "Times New Roman"
   size: "16pt"
@@ -21,39 +21,18 @@ h1:
   first-line-indent: "2em"
   align: "left"
 h2:
+  <<: *h1
   chinese-font: "FZKai-Z03"
-  latin-font: "Times New Roman"
-  size: "16pt"
-  color: "#000000"
-  space-before: "0pt"
-  space-after: "0pt"
-  line-spacing: "28pt"
   numbering: "（一）"
-  first-line-indent: "2em"
-  align: "left"
 h3:
+  <<: *h1
   chinese-font: "FZFangSong-Z02"
-  latin-font: "Times New Roman"
-  size: "16pt"
-  color: "#000000"
-  space-before: "0pt"
-  space-after: "0pt"
-  line-spacing: "28pt"
   numbering: "1. "
-  first-line-indent: "2em"
-  align: "left"
 h4:
+  <<: *h1
   chinese-font: "FZFangSong-Z02"
-  latin-font: "Times New Roman"
-  size: "16pt"
-  color: "#000000"
-  space-before: "0pt"
-  space-after: "0pt"
-  line-spacing: "28pt"
   numbering: "（1）"
-  first-line-indent: "2em"
-  align: "left"
-body:
+body: &body
   chinese-font: "FZFangSong-Z02"
   latin-font: "Times New Roman"
   size: "16pt"
@@ -61,38 +40,52 @@ body:
   space-before: "0pt"
   space-after: "0pt"
   line-spacing: "28pt"
+  numbering: null
   first-line-indent: "2em"
   align: "justify"
 image:
+  chinese-font: null
+  latin-font: null
+  size: null
+  color: null
   space-before: "0pt"
   space-after: "0pt"
   line-spacing: "1em"
+  numbering: null
+  first-line-indent: "0pt"
   align: "center"
 image-caption:
-  chinese-font: "FZFangSong-Z02"
-  latin-font: "Times New Roman"
-  size: "16pt"
-  color: "#000000"
-  space-before: "0pt"
-  space-after: "0pt"
-  line-spacing: "28pt"
+  <<: *body
   numbering: "图1 "
-  first-line-indent: null
+  first-line-indent: "0pt"
   align: "center"
+ordered-list:
+  <<: *body
+  numbering: "1. "
+  indent-before-text-increment: "2em"
+unordered-list:
+  <<: *body
+  numbering: "- "
+  indent-before-text-increment: "2em"
+inline-math: &inline-math
+  <<: *body
+  chinese-font: "Microsoft YaHei"
+  latin-font: "STIXGeneral"
 math-block:
+  <<: *inline-math
   space-before: "0pt"
   space-after: "0pt"
   line-spacing: "1em"
+  first-line-indent: "0pt"
   align: "center"
-enumerated-list:
-  chinese-font: "FZFangSong-Z02"
-  latin-font: "Times New Roman"
-  size: "16pt"
-  color: "#000000"
+inline-code: &inline-code
+  <<: *body
+  chinese-font: "Microsoft YaHei"
+  latin-font: "Consolas"
+code-block:
+  <<: *inline-code
   space-before: "0pt"
   space-after: "0pt"
-  line-spacing: "28pt"
-  numbering: "1. "
-  indent-before-text-increment: "2em"
-  first-line-indent: "2em"
-  align: "justify"
+  line-spacing: "1em"
+  first-line-indent: "0pt"
+  align: "center"
