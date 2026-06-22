@@ -11,7 +11,7 @@ def render_latex(
     expression: str,
     *,
     font_size: float = 16,
-    font_family: str = "STIXGeneral",
+    fontset: str = "stix",
     color: str = "black",
     dpi: int = 360,
 ) -> BytesIO:
@@ -20,20 +20,19 @@ def render_latex(
         raise ValueError("empty LaTeX expression")
     wrapped = expression if expression.startswith("$") else f"${expression}$"
     output = BytesIO()
-    with mpl.rc_context(
-        {
-            "mathtext.fontset": "stix",
-            "font.family": font_family,
-            "text.color": color,
-        }
-    ):
-        mathtext.math_to_image(
-            wrapped,
-            output,
-            prop=FontProperties(family=font_family, size=font_size),
-            dpi=dpi,
-            format="png",
-            color=color,
-        )
+    try:
+        with mpl.rc_context({"mathtext.fontset": fontset}):
+            mathtext.math_to_image(
+                wrapped,
+                output,
+                prop=FontProperties(size=font_size),
+                dpi=dpi,
+                format="png",
+                color=color,
+            )
+    except ValueError as exc:
+        if "mathtext.fontset" in str(exc):
+            raise ValueError(f"unsupported math fontset: {fontset}") from exc
+        raise
     output.seek(0)
     return output

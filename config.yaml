@@ -69,8 +69,8 @@ unordered-list:
   indent-before-text-increment: "2em"
 inline-math: &inline-math
   <<: *body
-  chinese-font: "Microsoft YaHei"
-  latin-font: "STIXGeneral"
+  chinese-font: null
+  latin-font: "cm"
 math-block:
   <<: *inline-math
   space-before: "0pt"

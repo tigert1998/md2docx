@@ -163,14 +163,22 @@ def test_local_image_path_supports_chinese_characters(tmp_path: Path) -> None:
         assert any(name.startswith("word/media/") for name in archive.namelist())
 
 
-def test_new_computer_modern_uses_builtin_math_font_without_findfont_warning(
-    caplog: pytest.LogCaptureFixture,
+def test_math_fontset_renders_without_configuring_font_family(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    image = render_latex("E=mc^2", font_family="NewComputerModern Math")
+    configured_rc: dict[str, str] = {}
+    original_rc_context = __import__("matplotlib").rc_context
+
+    def capture_rc_context(rc: dict[str, str]):
+        configured_rc.update(rc)
+        return original_rc_context(rc)
+
+    monkeypatch.setattr("md2docx.math_render.mpl.rc_context", capture_rc_context)
+    image = render_latex("E=mc^2", fontset="cm")
     assert image.read(8) == b"\x89PNG\r\n\x1a\n"
-    assert not any("findfont" in record.getMessage() for record in caplog.records)
+    assert configured_rc == {"mathtext.fontset": "cm"}
 
 
-def test_unknown_math_font_fails_instead_of_silently_falling_back() -> None:
-    with pytest.raises(ValueError, match="configured math font.*not installed"):
-        render_latex("x", font_family="Definitely Missing Math Font")
+def test_unknown_math_fontset_fails_instead_of_silently_falling_back() -> None:
+    with pytest.raises(ValueError, match="unsupported math fontset"):
+        render_latex("x", fontset="Definitely Missing Math Font")

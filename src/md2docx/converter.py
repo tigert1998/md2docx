@@ -241,7 +241,7 @@ class DocxBuilder:
                 image = render_latex(
                     node.get("raw", ""),
                     font_size=config.size_pt or 16,
-                    font_family=config.latin_font or "STIXGeneral",
+                    fontset=config.latin_font or "stix",
                     color=f"#{config.color}" if config.color is not None else "black",
                 )
                 paragraph.add_run().add_picture(image)
@@ -270,7 +270,7 @@ class DocxBuilder:
         image = render_latex(
             expression,
             font_size=config.size_pt or 16,
-            font_family=config.latin_font or "STIXGeneral",
+            fontset=config.latin_font or "stix",
             color=f"#{config.color}" if config.color is not None else "black",
         )
         paragraph.add_run().add_picture(image)
