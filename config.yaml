@@ -7,7 +7,9 @@ title:
   space-after: "28pt"
   line-spacing: "28pt"
   numbering: null
-  first-line-indent: "0pt"
+  hanging-indent: null
+  first-line-indent: null
+  indent-before-text: "0pt"
   align: "center"
 h1: &h1
   chinese-font: "FZHei-B01"
@@ -18,7 +20,9 @@ h1: &h1
   space-after: "0pt"
   line-spacing: "28pt"
   numbering: "一、"
+  hanging-indent: null
   first-line-indent: "2em"
+  indent-before-text: "0pt"
   align: "left"
 h2:
   <<: *h1
@@ -41,7 +45,9 @@ body: &body
   space-after: "0pt"
   line-spacing: "28pt"
   numbering: null
+  hanging-indent: null
   first-line-indent: "2em"
+  indent-before-text: "0pt"
   align: "justify"
 image:
   chinese-font: null
@@ -52,20 +58,28 @@ image:
   space-after: "0pt"
   line-spacing: "1em"
   numbering: null
-  first-line-indent: "0pt"
+  hanging-indent: null
+  first-line-indent: null
+  indent-before-text: "0pt"
   align: "center"
 image-caption:
   <<: *body
   numbering: "图1 "
-  first-line-indent: "0pt"
+  first-line-indent: null
   align: "center"
 ordered-list:
   <<: *body
   numbering: "1. "
+  hanging-indent: "2em"
+  first-line-indent: null
+  indent-before-text: "2em"
   indent-before-text-increment: "2em"
 unordered-list:
   <<: *body
   numbering: "- "
+  hanging-indent: "2em"
+  first-line-indent: null
+  indent-before-text: "2em"
   indent-before-text-increment: "2em"
 inline-math: &inline-math
   <<: *body
@@ -76,7 +90,7 @@ math-block:
   space-before: "0pt"
   space-after: "0pt"
   line-spacing: "1em"
-  first-line-indent: "0pt"
+  first-line-indent: null
   align: "center"
 inline-code: &inline-code
   <<: *body
@@ -87,13 +101,14 @@ code-block:
   space-before: "0pt"
   space-after: "0pt"
   line-spacing: "1em"
-  first-line-indent: "0pt"
+  first-line-indent: null
+  indent-before-text: "2em"
   align: "left"
 table-header:
   <<: *body
-  first-line-indent: "0pt"
+  first-line-indent: null
   align: "center"
 table-body:
   <<: *body
-  first-line-indent: "0pt"
+  first-line-indent: null
   align: "left"

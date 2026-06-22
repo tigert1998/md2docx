@@ -20,7 +20,9 @@ TEXT_FIELDS = {
     "space-after",
     "line-spacing",
     "numbering",
+    "hanging-indent",
     "first-line-indent",
+    "indent-before-text",
     "align",
 }
 LIST_FIELDS = TEXT_FIELDS | {"indent-before-text-increment"}
@@ -70,7 +72,9 @@ class StyleConfig:
     space_after: Length
     line_spacing: Length
     numbering: str | None
+    hanging_indent: Length | None
     first_line_indent: Length | None
+    indent_before_text: Length
     align: WD_ALIGN_PARAGRAPH
     indent_before_text_increment: Length | None = None
 
@@ -147,6 +151,16 @@ def _parse_style(name: str, data: Any) -> StyleConfig:
     numbering = data["numbering"]
     if numbering is not None and not isinstance(numbering, str):
         raise ValueError(f"{name}.numbering must be a string or null")
+    hanging_indent = _optional_length(
+        data["hanging-indent"], f"{name}.hanging-indent"
+    )
+    first_line_indent = _optional_length(
+        data["first-line-indent"], f"{name}.first-line-indent"
+    )
+    if hanging_indent is not None and first_line_indent is not None:
+        raise ValueError(
+            f"{name}.hanging-indent and {name}.first-line-indent are mutually exclusive"
+        )
     increment = None
     if name in LIST_SECTIONS:
         increment = _length(
@@ -167,8 +181,10 @@ def _parse_style(name: str, data: Any) -> StyleConfig:
         space_after=_length(data["space-after"], f"{name}.space-after"),
         line_spacing=_length(data["line-spacing"], f"{name}.line-spacing"),
         numbering=numbering,
-        first_line_indent=_optional_length(
-            data["first-line-indent"], f"{name}.first-line-indent"
+        hanging_indent=hanging_indent,
+        first_line_indent=first_line_indent,
+        indent_before_text=_length(
+            data["indent-before-text"], f"{name}.indent-before-text"
         ),
         align=_alignment(data["align"], f"{name}.align"),
         indent_before_text_increment=increment,
@@ -221,7 +237,14 @@ def apply_config_to_style(word_style: Any, config: StyleConfig) -> None:
             if config.line_spacing.unit == "pt"
             else config.line_spacing.value
         )
-        if config.first_line_indent is None:
+        fmt.left_indent = Pt(
+            config.indent_before_text.to_points(config.size_pt)
+        )
+        if config.hanging_indent is not None:
+            fmt.first_line_indent = Pt(
+                -config.hanging_indent.to_points(config.size_pt)
+            )
+        elif config.first_line_indent is None:
             fmt.first_line_indent = None
         else:
             fmt.first_line_indent = Pt(

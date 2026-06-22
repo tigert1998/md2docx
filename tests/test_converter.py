@@ -32,12 +32,15 @@ def test_frontmatter_is_optional() -> None:
 def test_real_config_is_the_strict_schema(tmp_path: Path) -> None:
     styles = load_config(CONFIG_PATH)
     assert set(styles) == REQUIRED_SECTIONS
-    assert styles["title"].first_line_indent is not None
-    assert styles["title"].first_line_indent.unit == "pt"
+    assert styles["title"].first_line_indent is None
+    assert styles["body"].first_line_indent is not None
+    assert styles["body"].first_line_indent.unit == "em"
     assert styles["title"].space_before.unit == "pt"
     assert styles["title"].space_after.unit == "pt"
+    assert styles["title"].indent_before_text.unit == "pt"
     assert styles["ordered-list"].indent_before_text_increment is not None
     assert styles["unordered-list"].indent_before_text_increment is not None
+    assert styles["ordered-list"].hanging_indent is not None
 
     config = tmp_path / "config.yaml"
     config.write_text(CONFIG.replace("inline-code:", "missing-inline-code:", 1), encoding="utf-8")
@@ -51,6 +54,17 @@ def test_real_config_is_the_strict_schema(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="title is missing required field.*color"):
+        load_config(config)
+
+    config.write_text(
+        CONFIG.replace(
+            "  hanging-indent: null\n  first-line-indent: null",
+            '  hanging-indent: "1em"\n  first-line-indent: "1em"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="mutually exclusive"):
         load_config(config)
 
 
@@ -115,11 +129,19 @@ $$
     assert [
         round(document.styles[f"ordered-list-{level}"].paragraph_format.left_indent.pt)
         for level in range(1, 4)
-    ] == [0, 32, 64]
+    ] == [32, 64, 96]
     assert [
         round(document.styles[f"unordered-list-{level}"].paragraph_format.left_indent.pt)
         for level in range(1, 3)
-    ] == [0, 32]
+    ] == [32, 64]
+    assert [
+        round(
+            document.styles[
+                f"ordered-list-{level}"
+            ].paragraph_format.first_line_indent.pt
+        )
+        for level in range(1, 4)
+    ] == [-32, -32, -32]
 
     table = document.tables[0]
     assert [cell.paragraphs[0].style.name for cell in table.rows[0].cells] == [
@@ -171,9 +193,10 @@ $$
     assert "md2docx unordered-list numbering" in numbering_xml
     assert 'w:pStyle w:val="ordered-list-1"' in numbering_xml
     assert 'w:pStyle w:val="unordered-list-1"' in numbering_xml
-    assert 'w:left="0"' in numbering_xml
     assert 'w:left="640"' in numbering_xml
     assert 'w:left="1280"' in numbering_xml
+    assert 'w:left="1920"' in numbering_xml
+    assert 'w:hanging="640"' in numbering_xml
     assert "<w:rFonts" not in document_xml
     assert "<w:sz " not in document_xml
     assert "<w:color " not in document_xml

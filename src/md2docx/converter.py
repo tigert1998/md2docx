@@ -259,8 +259,15 @@ class DocxBuilder:
                     style_name, WD_STYLE_TYPE.PARAGRAPH
                 )
                 apply_config_to_style(word_style, config)
+                hanging_indent = (
+                    0
+                    if config.hanging_indent is None
+                    else config.hanging_indent.to_points(config.size_pt)
+                )
                 word_style.paragraph_format.left_indent = Pt(
-                    config.indent_before_text_increment.to_points(config.size_pt)
+                    config.indent_before_text.to_points(config.size_pt)
+                    + hanging_indent
+                    + config.indent_before_text_increment.to_points(config.size_pt)
                     * (level - 1)
                 )
                 set_style_numbering(word_style, num_id, level)

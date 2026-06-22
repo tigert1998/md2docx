@@ -78,6 +78,7 @@ def _append_level(
     paragraph_style: str,
     text_style: StyleConfig,
     left_twips: int | None = None,
+    hanging_twips: int | None = None,
 ) -> None:
     lvl = OxmlElement("w:lvl")
     lvl.set(qn("w:ilvl"), str(level))
@@ -91,6 +92,8 @@ def _append_level(
         ppr = OxmlElement("w:pPr")
         indent = OxmlElement("w:ind")
         indent.set(qn("w:left"), str(left_twips))
+        if hanging_twips is not None:
+            indent.set(qn("w:hanging"), str(hanging_twips))
         ppr.append(indent)
         lvl.append(ppr)
     lvl.append(_run_properties(text_style))
@@ -163,8 +166,23 @@ def install_list_numbering(
             fmt, text = _numbering_level(style.numbering, level)
         else:
             fmt, text = "bullet", style.numbering
+        hanging_points = (
+            0
+            if style.hanging_indent is None
+            else style.hanging_indent.to_points(style.size_pt)
+        )
         left_twips = round(
-            style.indent_before_text_increment.to_points(style.size_pt) * level * 20
+            (
+                style.indent_before_text.to_points(style.size_pt)
+                + hanging_points
+                + style.indent_before_text_increment.to_points(style.size_pt) * level
+            )
+            * 20
+        )
+        hanging_twips = (
+            None
+            if style.hanging_indent is None
+            else round(hanging_points * 20)
         )
         _append_level(
             abstract,
@@ -174,6 +192,7 @@ def install_list_numbering(
             paragraph_style=f"{style.name}-{level + 1}",
             text_style=style,
             left_twips=left_twips,
+            hanging_twips=hanging_twips,
         )
     return _install(numbering, abstract, abstract_id)
 
