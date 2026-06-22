@@ -199,7 +199,12 @@ $$
             ppr = paragraph._p.pPr
             if ppr is not None:
                 tags = {child.tag.rsplit("}", 1)[-1] for child in ppr}
-                assert tags <= {"pStyle"}
+                allowed = {"pStyle"}
+                if paragraph.style.name.startswith(
+                    ("ordered-list-", "unordered-list-")
+                ):
+                    allowed.add("numPr")
+                assert tags <= allowed
 
     with ZipFile(output) as archive:
         styles_xml = archive.read("word/styles.xml").decode("utf-8")
@@ -220,10 +225,7 @@ $$
     for level in range(1, 4):
         layout = list_level_layout(list_config, level)
         assert f'w:left="{round(layout.left_indent_pt * 20)}"' in numbering_xml
-        assert (
-            f'w:hanging="{round(layout.hanging_indent_pt * 20)}"'
-            in numbering_xml
-        )
+        assert f'w:hanging="{round(layout.hanging_indent_pt * 20)}"' in numbering_xml
     assert "<w:rFonts" not in document_xml
     assert "<w:sz " not in document_xml
     assert "<w:color " not in document_xml
@@ -295,11 +297,42 @@ def test_list_level_layout_is_the_single_indent_calculation() -> None:
         list_level_layout(config, level).left_indent_pt for level in range(1, 4)
     ] == [15, 18, 21]
     assert [
-        list_level_layout(config, level).hanging_indent_pt
-        for level in range(1, 4)
+        list_level_layout(config, level).hanging_indent_pt for level in range(1, 4)
     ] == [5, 5, 5]
     with pytest.raises(ValueError, match="at least 1"):
         list_level_layout(config, 0)
+
+
+def test_separate_ordered_lists_restart_and_honor_markdown_start(
+    tmp_path: Path,
+) -> None:
+    markdown = tmp_path / "numbering.md"
+    markdown.write_text(
+        "1. 第一项\n2. 第二项\n\n中间段落\n\n"
+        "1. 新列表第一项\n2. 新列表第二项\n\n另一个中间段落\n\n"
+        "3. 从三开始\n4. 从四继续\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "numbering.docx"
+
+    convert_markdown(markdown, output, CONFIG_PATH)
+
+    document = Document(output)
+    list_paragraphs = [
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.style.name.startswith("ordered-list-")
+    ]
+    num_ids = [int(paragraph._p.pPr.numPr.numId.val) for paragraph in list_paragraphs]
+    assert num_ids[0] == num_ids[1]
+    assert num_ids[2] == num_ids[3]
+    assert num_ids[4] == num_ids[5]
+    assert len({num_ids[0], num_ids[2], num_ids[4]}) == 3
+
+    with ZipFile(output) as archive:
+        numbering_xml = archive.read("word/numbering.xml").decode("utf-8")
+    assert numbering_xml.count('<w:startOverride w:val="1"') >= 2
+    assert '<w:startOverride w:val="3"' in numbering_xml
 
 
 def test_markdown_without_frontmatter_has_no_title_paragraph(tmp_path: Path) -> None:

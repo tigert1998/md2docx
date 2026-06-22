@@ -36,6 +36,8 @@ from .numbering import (
     install_caption_numbering,
     install_heading_numbering,
     install_list_numbering,
+    restart_numbering,
+    set_paragraph_numbering,
     set_style_numbering,
 )
 
@@ -195,6 +197,7 @@ class DocxBuilder:
         self.styles = styles
         self.source_dir = source_dir
         self.document = Document()
+        self._list_numbering_templates: dict[str, int] = {}
         self._configure_document()
 
     def style(self, name: str) -> StyleConfig:
@@ -258,6 +261,7 @@ class DocxBuilder:
         for name, ordered in (("ordered-list", True), ("unordered-list", False)):
             config = self.style(name)
             num_id = install_list_numbering(self.document, config, ordered=ordered)
+            self._list_numbering_templates[name] = num_id
             for level in range(1, 10):
                 style_name = f"{name}-{level}"
                 word_style = self.document.styles.add_style(
@@ -555,13 +559,22 @@ class DocxBuilder:
             if token.get("attrs", {}).get("ordered")
             else "unordered-list"
         )
-        style_name = f"{base}-{min(level + 1, 9)}"
+        word_level = min(level + 1, 9)
+        style_name = f"{base}-{word_level}"
+        start = int(token.get("attrs", {}).get("start", 1))
+        num_id = restart_numbering(
+            self.document,
+            self._list_numbering_templates[base],
+            level=word_level,
+            start=start,
+        )
         for item in token.get("children", []):
             for block in item.get("children", []):
                 if block["type"] == "list":
                     self.add_list(block, level + 1)
                 else:
                     paragraph = self.document.add_paragraph(style=style_name)
+                    set_paragraph_numbering(paragraph, num_id, word_level)
                     self.add_inline_nodes(paragraph, block.get("children", []))
 
     def add_code_block(self, token: dict[str, Any]) -> None:

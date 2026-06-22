@@ -110,6 +110,44 @@ def _install(numbering: Any, abstract: Any, abstract_id: int) -> int:
     return num_id
 
 
+def restart_numbering(
+    document: Any,
+    template_num_id: int,
+    *,
+    level: int,
+    start: int = 1,
+) -> int:
+    if level < 1:
+        raise ValueError("numbering level must be at least 1")
+    if start < 1:
+        raise ValueError("numbering start must be at least 1")
+    numbering = document.part.numbering_part.element
+    template = next(
+        (
+            num
+            for num in numbering.findall(qn("w:num"))
+            if num.get(qn("w:numId")) == str(template_num_id)
+        ),
+        None,
+    )
+    if template is None:
+        raise ValueError(f"numbering definition {template_num_id} does not exist")
+    abstract = template.find(qn("w:abstractNumId"))
+    if abstract is None:
+        raise ValueError(f"numbering definition {template_num_id} has no abstractNumId")
+
+    num_id = _next_id(numbering, "num", "numId")
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), str(num_id))
+    _value(num, "abstractNumId", abstract.get(qn("w:val")))
+    override = OxmlElement("w:lvlOverride")
+    override.set(qn("w:ilvl"), str(level - 1))
+    _value(override, "startOverride", str(start))
+    num.append(override)
+    numbering.append(num)
+    return num_id
+
+
 def install_heading_numbering(
     document: Any, heading_styles: list[tuple[int, StyleConfig]]
 ) -> int:
@@ -183,7 +221,14 @@ def install_list_numbering(document: Any, style: StyleConfig, *, ordered: bool) 
 
 
 def set_style_numbering(style: Any, num_id: int, level: int) -> None:
-    ppr = style.element.get_or_add_pPr()
+    _set_numbering(style.element.get_or_add_pPr(), num_id, level)
+
+
+def set_paragraph_numbering(paragraph: Any, num_id: int, level: int) -> None:
+    _set_numbering(paragraph._p.get_or_add_pPr(), num_id, level)
+
+
+def _set_numbering(ppr: Any, num_id: int, level: int) -> None:
     existing = ppr.find(qn("w:numPr"))
     if existing is not None:
         ppr.remove(existing)
